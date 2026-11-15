@@ -28,16 +28,16 @@ The formula ([nathanZKL/homebrew-tap](https://github.com/nathanZKL/homebrew-tap)
 **macOS or Linux (release file)**
 
 ```bash
-curl -LO https://github.com/nathanZKL/dual-conductor-factory/releases/download/v0.1.1/ai-eng-0.1.1.pyz
-curl -LO https://github.com/nathanZKL/dual-conductor-factory/releases/download/v0.1.1/SHA256SUMS
+curl -LO https://github.com/nathanZKL/dual-conductor-factory/releases/download/v0.2.0/ai-eng-0.2.0.pyz
+curl -LO https://github.com/nathanZKL/dual-conductor-factory/releases/download/v0.2.0/SHA256SUMS
 shasum -a 256 --check --ignore-missing SHA256SUMS
-python3 ai-eng-0.1.1.pyz --version
+python3 ai-eng-0.2.0.pyz --version
 ```
 
 **Windows (PowerShell, with [uv](https://docs.astral.sh/uv/))**
 
 ```powershell
-$v = "0.1.1"
+$v = "0.2.0"
 Invoke-WebRequest "https://github.com/nathanZKL/dual-conductor-factory/releases/download/v$v/ai_eng-$v-py3-none-any.whl" -OutFile "ai_eng-$v-py3-none-any.whl"
 Invoke-WebRequest "https://github.com/nathanZKL/dual-conductor-factory/releases/download/v$v/SHA256SUMS" -OutFile SHA256SUMS
 (Get-FileHash "ai_eng-$v-py3-none-any.whl" -Algorithm SHA256).Hash.ToLower()   # must match the line in SHA256SUMS
@@ -58,10 +58,21 @@ ai-eng worktrees        # creates ../<repo>.worktrees/claude and ../<repo>.workt
 ai-eng doctor           # what is configured, verified, untested, missing or blocked
 ```
 
-Then start Claude Code in the main checkout as the coordinator, Claude Code in the `claude` worktree, and Codex in the `codex` worktree. Each reads its instructions from `CLAUDE.md` / `AGENTS.md` and `docs/ENGINEERING.md`.
+### Automated mode
+
+```bash
+ai-eng run "Add CSV export to the reports page"   # coordinator writes docs/ai-eng/plans/<id>.md, then stops
+# edit the plan until you like it
+ai-eng run --continue <id>                          # everything else is automatic
+```
+
+`--continue` runs the plan review loop (Codex reviews, the coordinator revises, until GO), builds each task in its owner's worktree with the configured subagents, runs your test command itself, commits, has the *other* conductor review that exact SHA (NO-GO loops back to the author, 3 rounds max), then pushes and opens a draft PR. You merge. Agents run headless (`claude -p`, `codex exec`) with scoped permissions and never commit, push or open PRs themselves. A run stops and tells you why on escalation, repeated test failures, or when `automation.budget_usd` (default $20 of Claude usage) is spent; `ai-eng run --status` shows where it is, and `--continue` resumes.
+
+You can also run the conductors interactively: start Claude Code in the main checkout as the coordinator, Claude Code in the `claude` worktree, and Codex in the `codex` worktree. Each reads its instructions from `CLAUDE.md` / `AGENTS.md` and `docs/ENGINEERING.md`.
 
 | Command | Purpose |
 |---|---|
+| `ai-eng run "<idea>" \| --continue <id> \| --status` | Automated mode. |
 | `ai-eng init [--dry-run] [--yes] [--on-conflict stop\|skip\|side]` | Write or update the workflow files. Safe to re-run. |
 | `ai-eng worktrees [--dry-run] [--yes]` | Create the two conductor worktrees. |
 | `ai-eng review record\|check\|list` | GO/NO-GO verdicts tied to an exact SHA or plan version. |

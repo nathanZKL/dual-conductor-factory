@@ -1,8 +1,24 @@
 # Orchestration and Orca
 
-ai-eng sets up roles, instructions and worktrees. It does not start agents or move messages between them.
+ai-eng sets up roles, instructions and worktrees, and `ai-eng run` drives the agents for you.
 
-## Without Orca (always works)
+## Automated: `ai-eng run` (recommended)
+
+ai-eng starts each agent headless, one step at a time, and moves results between them itself. Nobody relays messages.
+
+| Step | Agent | How it runs | Permissions |
+|---|---|---|---|
+| Write / revise plan | Coordinator (Claude) | `claude -p --model <coordinator>` in the main checkout | read code; write only `docs/ai-eng/plans/<id>.md` |
+| Review plan | Conductor B (Codex) | `codex exec -m <conductor B model>` | `read-only` sandbox |
+| Build a Claude task | Conductor A (Claude) + its subagents | `claude -p` in the Claude worktree | `acceptEdits`, allowlist: test command, read-only git |
+| Build a Codex task | Codex workers: research, implement, test, security | `codex exec -m <role model>` in the Codex worktree | `workspace-write` (research and security: `read-only`) |
+| Test + commit | ai-eng | runs `project.test_command`, then `git commit` | n/a |
+| Review a commit | The *other* conductor | in its own worktree, detached at the exact SHA | read-only |
+| Push + draft PR | ai-eng | `git push`, `gh pr create --draft` | your Git and gh logins |
+
+State and per-step logs live in `.git/ai-eng/runs/`. Tasks run one at a time, in dependency order.
+
+## Manual (interactive sessions)
 
 1. Start Claude Code in the main checkout and tell it it is the coordinator.
 2. Start Claude Code in `../<repo>.worktrees/claude` and Codex in `../<repo>.worktrees/codex`.

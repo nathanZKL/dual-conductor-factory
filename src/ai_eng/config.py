@@ -70,6 +70,7 @@ def default_config(name: str, description: str, stack: str, base_branch: str) ->
             "security": role(False, "opus", "gpt-6.1-sol", "high"),
         },
         "limits": {"max_subagents_per_conductor": MAX_SUBAGENTS_CAP, "max_review_rounds": 3},
+        "automation": {"budget_usd": 20, "agent_timeout_minutes": 30, "test_timeout_minutes": 15, "max_fix_attempts": 2},
         "ci": {"enabled": stack != "none"},
     }
 
