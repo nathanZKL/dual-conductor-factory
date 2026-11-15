@@ -16,6 +16,12 @@ def isolated_git(monkeypatch):
     """Hermetic Git: no user/system config, fixed identity, no autocrlf surprises."""
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    # No background `git maintenance`: it creates and deletes .git lock files while snapshots run.
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "2")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "maintenance.auto")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "false")
+    monkeypatch.setenv("GIT_CONFIG_KEY_1", "gc.auto")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_1", "0")
     for var in ("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"):
         monkeypatch.setenv(var, "Test")
     for var in ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"):
@@ -49,7 +55,10 @@ def snapshot(root: Path):
     """Every path under root (including .git) with size and mtime, to prove nothing was written."""
     out = {}
     for path in sorted(root.rglob("*")):
-        stat = path.stat()
+        try:
+            stat = path.stat()
+        except FileNotFoundError:  # transient git lock file vanished mid-walk
+            continue
         out[path.relative_to(root).as_posix()] = (path.is_dir(), stat.st_size if path.is_file() else 0, stat.st_mtime_ns)
     return out
 

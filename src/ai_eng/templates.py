@@ -31,7 +31,8 @@ def load(name: str) -> str:
     data = pkgutil.get_data("ai_eng", "templates/" + name)
     if data is None:
         raise FileNotFoundError(f"template not found: {name}")
-    return data.decode("utf-8")
+    # Same output on every platform, even from a CRLF (Windows autocrlf) checkout of this repo.
+    return data.decode("utf-8").replace("\r\n", "\n")
 
 
 def render(text: str, values: Dict[str, object]) -> str:
