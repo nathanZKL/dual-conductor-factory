@@ -37,10 +37,21 @@ def digest(text: str) -> str:
 
 
 def read_text(path: Path) -> Optional[str]:
+    """Read UTF-8 text keeping line endings as they are on disk (CRLF stays CRLF). None if missing."""
     try:
-        return path.read_text(encoding="utf-8")
+        with open(path, encoding="utf-8", newline="") as handle:
+            return handle.read()
     except FileNotFoundError:
         return None
+
+
+def eol_of(text: str) -> str:
+    return "\r\n" if "\r\n" in text else "\n"
+
+
+def with_eol(text: str, eol: str) -> str:
+    text = text.replace("\r\n", "\n")
+    return text.replace("\n", eol) if eol != "\n" else text
 
 
 def write_text(path: Path, text: str) -> None:
@@ -57,7 +68,8 @@ _SECRET_PATTERNS = [
     re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"),
 ]
-_URL_CREDENTIALS = re.compile(r"(https?://)[^/\s:@]+(:[^/\s@]*)?@")
+# Greedy up to the last "@" before the path, so passwords containing "@" are removed whole.
+_URL_CREDENTIALS = re.compile(r"(https?://)[^/\s]*@")
 
 
 def redact(text: str) -> str:
@@ -67,5 +79,7 @@ def redact(text: str) -> str:
     text = _URL_CREDENTIALS.sub(r"\1", text)
     home = str(Path.home())
     if len(home) > 1:
-        text = text.replace(home, "~").replace(home.replace("\\", "/"), "~")
+        for form in {home, home.replace("\\", "/")}:
+            # Only whole path components: /home/a must not turn /home/ab into ~b.
+            text = re.sub(re.escape(form) + r"(?![^\\/\s\"'`)\]|])", "~", text)
     return text

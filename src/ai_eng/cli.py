@@ -11,7 +11,7 @@ from typing import List, Optional
 from . import __version__
 from .config import CONFIG_PATH, STACKS, ConfigError, default_config, detect_stack, dump, load_config, load_manifest
 from .gitrepo import GitError, current_branch, default_branch, dirty_paths, origin_url, repo_root, rev
-from .planner import CHANGES, Action, apply, diff, plan
+from .planner import CHANGES, Action, StaleError, apply, diff, plan
 from .util import redact, run, write_text
 
 EXIT_OK, EXIT_ERROR, EXIT_CONFLICT, EXIT_ESCALATE = 0, 1, 2, 4
@@ -101,7 +101,11 @@ def cmd_init(args) -> int:
         if not _confirm(f"\nApply {len(changes)} change(s)?"):
             print("Cancelled. Nothing was written.")
             return EXIT_ERROR
-    undo = apply(root, actions, mode or "stop")
+    try:
+        undo = apply(root, actions, mode or "stop")
+    except StaleError as exc:
+        print(f"\nStopped: {exc}", file=sys.stderr)
+        return EXIT_CONFLICT
     print("\nDone. To undo any change:")
     for line in undo:
         print(f"  {line}")
@@ -238,16 +242,23 @@ def cmd_review(args) -> int:
         print(("OK: " if ok else "NOT READY: ") + message)
         return EXIT_OK if ok else EXIT_ERROR
 
+    if args.kind and args.kind != kind:
+        print(f"error: --kind {args.kind} does not match the target (use --plan-id for plan, --branch for commit)", file=sys.stderr)
+        return EXIT_ERROR
+    limit = cfg["limits"]["max_review_rounds"]
     try:
         rec = review.record(root, kind, key, args.verdict, args.reviewer, args.author, current,
-                            args.test or [], args.finding or [], args.scope or "", args.conditions or "")
+                            args.test or [], args.finding or [], args.scope or "", args.conditions or "",
+                            max_rounds=limit)
+    except review.EscalatedError as exc:
+        print(f"ESCALATE: {exc}", file=sys.stderr)
+        return EXIT_ESCALATE
     except (review.ReviewError, FileExistsError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_ERROR
     print(f"Recorded {kind} review for '{key}': {rec['verdict']} (round {rec['round']}).\n")
     print(review.summary_markdown(rec))
     hist = review.history(review.load_all(root), kind, key)
-    limit = cfg["limits"]["max_review_rounds"]
     if rec["verdict"] == "NO-GO" and review.nogo_count(hist) >= limit:
         print(f"\nESCALATE: {review.nogo_count(hist)} NO-GO rounds (limit {limit}). Stop and ask the owner to decide.")
         return EXIT_ESCALATE
@@ -258,6 +269,11 @@ def _review_target(root: Path, args):
     from . import review
 
     if args.plan_id:
+        try:
+            review.plan_path(args.plan_id)
+        except review.ReviewError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return "plan", None, None
         return "plan", args.plan_id, review.plan_version(root, args.plan_id)
     branch = args.branch or current_branch(root)
     if not branch:

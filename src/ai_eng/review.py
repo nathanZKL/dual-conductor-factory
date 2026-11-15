@@ -22,16 +22,28 @@ class ReviewError(ValueError):
     pass
 
 
+class EscalatedError(ReviewError):
+    pass
+
+
 def store(root: Path) -> Path:
     return common_dir(root) / "ai-eng" / "reviews"
 
 
+PLAN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
 def plan_path(plan_id: str) -> str:
+    if not PLAN_ID.match(plan_id) or ".." in plan_id:
+        raise ReviewError(f"invalid plan id {plan_id!r}: use letters, digits, '.', '_' and '-' only")
     return f"docs/ai-eng/plans/{plan_id}.md"
 
 
 def plan_version(root: Path, plan_id: str) -> Optional[str]:
-    text = read_text(root / plan_path(plan_id))
+    try:
+        text = read_text(root / plan_path(plan_id))
+    except (OSError, UnicodeDecodeError):
+        return None
     return digest(text) if text is not None else None
 
 
@@ -70,6 +82,7 @@ def record(
     findings: List[str],
     scope: str = "",
     conditions: str = "",
+    max_rounds: Optional[int] = None,
 ) -> Dict:
     if kind not in KINDS:
         raise ReviewError(f"kind must be one of {KINDS}")
@@ -81,9 +94,16 @@ def record(
         raise ReviewError("self-review is not allowed: the reviewer must be a different agent than the author")
     if kind == "commit" and not sha:
         raise ReviewError("a commit review needs a commit SHA")
+    if kind == "plan" and not sha:
+        raise ReviewError(f"plan file {plan_path(key)} not found: write the plan before reviewing it")
     if verdict == "NO-GO" and not findings:
         raise ReviewError("a NO-GO needs at least one --finding")
     prior = history(load_all(root), kind, key)
+    if max_rounds is not None and nogo_count(prior) >= max_rounds:
+        raise EscalatedError(
+            f"{kind} '{key}' is escalated after {nogo_count(prior)} NO-GO rounds; only the owner can decide. "
+            "The owner may raise limits.max_review_rounds in .ai-eng/config.json or start a new plan or branch."
+        )
     rec = {
         "kind": kind,
         "key": key,
@@ -100,8 +120,9 @@ def record(
     }
     folder = store(root)
     folder.mkdir(parents=True, exist_ok=True)
+    # Readable name plus a hash of the exact key, so "feat/x" and "feat_x" never collide.
     safe_key = re.sub(r"[^A-Za-z0-9._-]+", "_", key)
-    path = folder / f"{kind}-{safe_key}-r{rec['round']:02d}.json"
+    path = folder / f"{kind}-{safe_key}-{digest(key)[:8]}-r{rec['round']:02d}.json"
     # "x" mode: never overwrite an existing record, even if two reviewers race.
     with open(path, "x", encoding="utf-8") as handle:
         json.dump(rec, handle, indent=2)
@@ -126,7 +147,9 @@ def check(records: List[Dict], kind: str, key: str, current: Optional[str]) -> T
                 "new commits need a new review"
             )
         return True, f"GO by {last.get('reviewer')} at {current} (round {last.get('round')})"
-    if last.get("sha") and current and last.get("sha") != current:
+    if current is None:
+        return False, f"plan file for '{key}' not found"
+    if last.get("sha") != current:
         return False, f"plan '{key}' changed after its GO: it needs a new review"
     return True, f"GO by {last.get('reviewer')} (round {last.get('round')})"
 

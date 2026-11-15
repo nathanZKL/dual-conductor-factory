@@ -111,7 +111,7 @@ def validate(cfg: Dict) -> Dict:
 
 
 def dump(obj) -> str:
-    return json.dumps(obj, indent=2) + "\n"
+    return json.dumps(obj, indent=2, ensure_ascii=False) + "\n"
 
 
 def load_config(root: Path) -> Optional[Dict]:
