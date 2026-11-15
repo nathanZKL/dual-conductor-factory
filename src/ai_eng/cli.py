@@ -286,6 +286,33 @@ def _review_target(root: Path, args):
     return "commit", branch, sha
 
 
+# ---------------------------------------------------------------- run
+
+def cmd_run(args) -> int:
+    from . import runner
+
+    root = _root(args)
+    cfg = load_config(root)
+    if cfg is None:
+        print("No .ai-eng/config.json: run `ai-eng init` first.")
+        return EXIT_ERROR
+    try:
+        if args.status is not None:
+            return runner.status(root, cfg, args.status or None)
+        if args.cont:
+            return runner.resume(root, cfg, args.cont)
+        if not args.idea:
+            print('Usage: ai-eng run "<feature idea>"  |  ai-eng run --continue <plan-id>  |  ai-eng run --status')
+            return EXIT_ERROR
+        return runner.start(root, cfg, args.idea, args.plan_id)
+    except runner.RunStop as exc:
+        print(f"\nStopped: {exc}", file=sys.stderr)
+        return exc.code
+    except runner.review.ReviewError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+
+
 # ---------------------------------------------------------------- parser
 
 def build_parser() -> argparse.ArgumentParser:
@@ -340,6 +367,13 @@ def build_parser() -> argparse.ArgumentParser:
             rp.add_argument("--scope", help="what was reviewed")
             rp.add_argument("--conditions", help="conditions attached to a GO")
     p.set_defaults(func=cmd_review)
+
+    p = sub.add_parser("run", parents=[common], help="automate the loop: plan, reviews, builds, draft PRs")
+    p.add_argument("idea", nargs="?", help="feature idea for the coordinator")
+    p.add_argument("--plan-id", help="plan id (default: from the idea)")
+    p.add_argument("--continue", dest="cont", metavar="PLAN_ID", help="continue a run after you edited the plan, or after a stop")
+    p.add_argument("--status", nargs="?", const="", metavar="PLAN_ID", help="show runs")
+    p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("upgrade", parents=[common], help="show template updates")
     p.add_argument("--plan", action="store_true", help="show updates and conflicts without applying them")

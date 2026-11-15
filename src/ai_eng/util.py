@@ -31,6 +31,30 @@ def run(args: List[str], cwd: Optional[Path] = None, timeout: int = 20) -> Tuple
     return proc.returncode, proc.stdout.rstrip(), proc.stderr.strip()
 
 
+def run_tree(args, cwd: Path, timeout: int, input_text: Optional[str] = None, shell: bool = False) -> Tuple[Optional[int], str, str]:
+    """Run a command and, on timeout, kill its whole process tree (agents and test runners spawn children,
+    and a surviving grandchild would otherwise hold the pipes open forever). Returns (code or None on timeout, out, err)."""
+    import os
+    import signal
+
+    kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+    proc = subprocess.Popen(args, cwd=str(cwd), shell=shell, stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", **kwargs)
+    try:
+        out, err = proc.communicate(input_text, timeout=timeout)
+        return proc.returncode, out, err
+    except subprocess.TimeoutExpired:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
+        else:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        out, err = proc.communicate()
+        return None, out, err
+
+
 def digest(text: str) -> str:
     """Hash text with line endings normalised, so Git autocrlf on Windows is not seen as an edit."""
     return hashlib.sha256(text.replace("\r\n", "\n").encode("utf-8")).hexdigest()

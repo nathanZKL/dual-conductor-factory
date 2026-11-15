@@ -33,6 +33,18 @@ Base branch: `@@BASE_BRANCH@@`. Test command: `@@TEST_COMMAND@@`.
 9. **Publish.** When `ai-eng review check --branch <task-branch>` exits 0 (GO on the current head SHA), the author pushes the branch and opens a **draft** PR using the PR template.
 10. **Merge.** Only the owner merges.
 
+## Automated mode
+
+`ai-eng run "<feature idea>"` runs this workflow for you. The coordinator writes the plan and stops so the owner can edit it. `ai-eng run --continue <plan-id>` then does steps 4 to 9 with no hand-offs:
+
+- Codex reviews the plan, and the coordinator revises it until GO.
+- Each task is built in its owner's worktree with its subagents.
+- ai-eng runs `@@TEST_COMMAND@@` itself and commits.
+- The other conductor reviews that exact SHA; NO-GO loops back to the author.
+- On GO, ai-eng pushes and opens a draft PR.
+
+Agents never commit, push or open PRs in this mode; ai-eng does that after its own checks. It stops and asks the owner on escalation, on repeated test failures, or when the budget in `.ai-eng/config.json` (`automation.budget_usd`) is used up. `ai-eng run --status` shows progress.
+
 ## Subagents
 
 Each conductor may run at most @@MAX_SUBAGENTS@@ subagents at once. Implement and test run by default; research and security run only when the plan asks for them or the conductor finds a concrete need (auth, secrets, dependencies, untrusted input).
@@ -58,6 +70,7 @@ Each conductor may run at most @@MAX_SUBAGENTS@@ subagents at once. Implement an
 
 | Command | What it does |
 |---|---|
+| `ai-eng run "<idea>"` / `--continue <plan-id>` / `--status` | Automated mode (above). |
 | `ai-eng doctor` | Read-only health check: configured, verified, untested, missing, blocked. |
 | `ai-eng review record` / `check` / `list` | Record and check GO/NO-GO verdicts tied to exact SHAs. |
 | `ai-eng handoff` | Write a sanitized status handoff (branches, SHAs, reviews, blockers). |
