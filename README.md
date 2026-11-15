@@ -18,8 +18,12 @@ Every release has a `.pyz` (single-file app), a wheel and a sdist, plus `SHA256S
 **macOS (Homebrew)**
 
 ```bash
+brew tap nathanzkl/tap
+brew trust --formula nathanzkl/tap/ai-eng   # Homebrew 7 asks you to trust third-party formulae once
 brew install nathanzkl/tap/ai-eng
 ```
+
+The formula ([nathanZKL/homebrew-tap](https://github.com/nathanZKL/homebrew-tap)) installs the release `.pyz`, pinned by SHA-256, and runs it with Homebrew's `python@3.13` (installed as a dependency if you do not have it). Read the formula before trusting it.
 
 **macOS or Linux (release file)**
 
