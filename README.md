@@ -9,7 +9,7 @@ Owner idea -> Coordinator (Claude) plans -> Owner edits plan -> Codex reviews pl
   -> GO: push + draft PR -> owner merges
 ```
 
-`ai-eng` writes instructions, policies and templates, creates the worktrees, and records review verdicts. It does **not** install or run Claude Code, Codex or Orca, and it never commits, pushes, merges or deletes anything.
+`ai-eng` writes instructions, policies and templates, creates the worktrees, and records review verdicts. `ai-eng run` also drives Claude Code and Codex headless, and after its own test run and a GO review it commits, pushes and opens **draft** PRs. It never installs tools, uses Orca, merges, force-pushes or deletes anything.
 
 ## Install
 
@@ -28,16 +28,16 @@ The formula ([nathanZKL/homebrew-tap](https://github.com/nathanZKL/homebrew-tap)
 **macOS or Linux (release file)**
 
 ```bash
-curl -LO https://github.com/nathanZKL/dual-conductor-factory/releases/download/v0.2.0/ai-eng-0.2.0.pyz
-curl -LO https://github.com/nathanZKL/dual-conductor-factory/releases/download/v0.2.0/SHA256SUMS
+curl -LO https://github.com/nathanZKL/dual-conductor-factory/releases/download/v0.2.1/ai-eng-0.2.1.pyz
+curl -LO https://github.com/nathanZKL/dual-conductor-factory/releases/download/v0.2.1/SHA256SUMS
 shasum -a 256 --check --ignore-missing SHA256SUMS
-python3 ai-eng-0.2.0.pyz --version
+python3 ai-eng-0.2.1.pyz --version
 ```
 
 **Windows (PowerShell, with [uv](https://docs.astral.sh/uv/))**
 
 ```powershell
-$v = "0.2.0"
+$v = "0.2.1"
 Invoke-WebRequest "https://github.com/nathanZKL/dual-conductor-factory/releases/download/v$v/ai_eng-$v-py3-none-any.whl" -OutFile "ai_eng-$v-py3-none-any.whl"
 Invoke-WebRequest "https://github.com/nathanZKL/dual-conductor-factory/releases/download/v$v/SHA256SUMS" -OutFile SHA256SUMS
 (Get-FileHash "ai_eng-$v-py3-none-any.whl" -Algorithm SHA256).Hash.ToLower()   # must match the line in SHA256SUMS

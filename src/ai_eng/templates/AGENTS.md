@@ -28,7 +28,8 @@ At most @@MAX_SUBAGENTS@@ at once. Implement and test run by default; research a
 | research | @@CODEX_RESEARCH_MODEL@@ | @@CODEX_RESEARCH_EFFORT@@ |
 | security | @@CODEX_SECURITY_MODEL@@ | @@CODEX_SECURITY_EFFORT@@ |
 
-If Orca is installed, start a worker with a task file, for example:
+If you are running inside an Orca terminal, start a worker with a task file, for example:
 `orca orchestration worker-start --agent codex --model @@CODEX_IMPLEMENT_MODEL@@ --effort @@CODEX_IMPLEMENT_EFFORT@@ --worktree current --spec-file <task.md>`
+The task file names the files the worker may edit, says it must not commit, and says what test result proves it is done. Orca wakes you with the worker's `worker_done` report. Outside an Orca terminal the command fails with `no_active_sender_terminal`.
 Only one worker writes files in a worktree at a time. Research and security workers must not edit files.
-ai-eng has not verified Orca worker dispatch on this machine; `ai-eng doctor` reports it as untested. Without Orca, do the roles yourself in order: implement, then test.
+Without Orca, do the roles yourself in order: implement, then test.
