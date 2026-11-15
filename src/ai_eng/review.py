@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from .gitrepo import common_dir
+from .gitrepo import common_dir, worktrees
 from .util import digest, read_text
 
 KINDS = ("plan", "commit")
@@ -39,9 +39,16 @@ def plan_path(plan_id: str) -> str:
     return f"docs/ai-eng/plans/{plan_id}.md"
 
 
+def main_checkout(root: Path) -> Path:
+    """The main worktree (first in `git worktree list`), where the coordinator writes plans."""
+    trees = worktrees(root)
+    return trees[0]["path"] if trees and "path" in trees[0] else root
+
+
 def plan_version(root: Path, plan_id: str) -> Optional[str]:
+    """Digest of the plan in the main checkout, so reviewers in other worktrees see the same file."""
     try:
-        text = read_text(root / plan_path(plan_id))
+        text = read_text(main_checkout(root) / plan_path(plan_id))
     except (OSError, UnicodeDecodeError):
         return None
     return digest(text) if text is not None else None
@@ -95,7 +102,7 @@ def record(
     if kind == "commit" and not sha:
         raise ReviewError("a commit review needs a commit SHA")
     if kind == "plan" and not sha:
-        raise ReviewError(f"plan file {plan_path(key)} not found: write the plan before reviewing it")
+        raise ReviewError(f"plan file {plan_path(key)} not found in the main checkout ({main_checkout(root)}): write the plan before reviewing it")
     if verdict == "NO-GO" and not findings:
         raise ReviewError("a NO-GO needs at least one --finding")
     prior = history(load_all(root), kind, key)

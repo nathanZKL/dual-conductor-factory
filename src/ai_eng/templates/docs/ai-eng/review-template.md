@@ -16,7 +16,7 @@ Record every verdict with `ai-eng review record`. A GO applies to one exact SHA 
 - You are not the author. If you are, stop: the gate is blocked.
 - Review the exact SHA: `git show <sha>` and `git diff @@BASE_BRANCH@@...<sha>`.
 - Acceptance criteria from the plan are met.
-- Run the tests yourself (`@@TEST_COMMAND@@`) and record the command and result with `--test`.
+- Run the tests yourself: `git switch --detach <task-branch>` in your own worktree (with your own work committed or stashed), run `@@TEST_COMMAND@@`, switch back, and record the command and result with `--test`.
 - No secrets, no unrelated changes, no weakened tests, no disabled checks.
 - Each finding: file, line, problem, expected fix. Use NO-GO for anything that must change before merge.
 

@@ -19,7 +19,7 @@ Base branch: `@@BASE_BRANCH@@`. Test command: `@@TEST_COMMAND@@`.
 ## Workflow
 
 1. **Idea.** The owner sends a feature idea to the coordinator.
-2. **Plan.** The coordinator writes `docs/ai-eng/plans/<plan-id>.md` from `docs/ai-eng/plan-template.md`: tasks, the conductor that owns each task, interfaces, acceptance criteria, architecture, and which optional subagents each task needs.
+2. **Plan.** The coordinator writes, in the main checkout, `docs/ai-eng/plans/<plan-id>.md` from `docs/ai-eng/plan-template.md`: tasks, the conductor that owns each task, interfaces, acceptance criteria, architecture, and which optional subagents each task needs.
 3. **Owner edit.** The owner edits the plan until it fits, then sends it to review.
 4. **Plan review.** Conductor B (Codex) reviews the plan and records the verdict:
    `ai-eng review record --kind plan --plan-id <plan-id> --verdict GO|NO-GO --reviewer codex --author coordinator --finding "..."`
@@ -27,7 +27,7 @@ Base branch: `@@BASE_BRANCH@@`. Test command: `@@TEST_COMMAND@@`.
 5. **Dispatch.** On GO, the coordinator sends each task to the conductor that owns it.
 6. **Build.** The conductor creates a task branch from `@@BASE_BRANCH@@` (for example `claude/<plan-id>-<task>` or `codex/<plan-id>-<task>`) and works with its subagents (below).
 7. **Commit.** When the task's acceptance criteria are met and `@@TEST_COMMAND@@` passes, the conductor commits.
-8. **Commit review.** The *other* conductor reviews that exact commit and records the verdict:
+8. **Commit review.** The *other* conductor reviews that exact commit (to run its tests: `git switch --detach <task-branch>` in the reviewer's own worktree, then switch back) and records the verdict:
    `ai-eng review record --kind commit --branch <task-branch> --verdict GO|NO-GO --reviewer <reviewer> --author <author> --test "<command>: <result>" --finding "..."`
    On NO-GO the author fixes, commits, and asks for another review. After @@MAX_REVIEW_ROUNDS@@ NO-GO rounds, stop and escalate to the owner.
 9. **Publish.** When `ai-eng review check --branch <task-branch>` exits 0 (GO on the current head SHA), the author pushes the branch and opens a **draft** PR using the PR template.
