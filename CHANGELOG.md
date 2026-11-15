@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.1.1
 
+- Plan reviews work from a conductor's worktree: `ai-eng review` reads plans from the main checkout, where the coordinator writes them.
+- Generated instructions (template v2) tell conductors where plans live and how to run the other conductor's tests (`git switch --detach <branch>`). Re-run `ai-eng init` to update existing repositories.
 - README: Homebrew 7 requires `brew trust` for third-party taps; the install steps now say so.
 - `scripts/render_formula.py`: use `formula_opt_bin` (passes `brew style`).
 

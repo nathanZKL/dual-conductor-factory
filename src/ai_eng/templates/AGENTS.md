@@ -6,14 +6,14 @@ Read `docs/ENGINEERING.md` first. It is the source of truth for roles, gates and
 
 ## Plan reviews
 
-The coordinator sends you plans (`docs/ai-eng/plans/<plan-id>.md`). Check tasks, interfaces, acceptance criteria and architecture, then record:
+The coordinator sends you plans. They live in the **main checkout** (the first path in `git worktree list`), at `docs/ai-eng/plans/<plan-id>.md`, not in your worktree. Read them there. Check tasks, interfaces, acceptance criteria and architecture, then record (from your worktree is fine):
 `ai-eng review record --kind plan --plan-id <plan-id> --verdict GO|NO-GO --reviewer codex --author coordinator --finding "..."`
 
 ## Your tasks
 
 - Work only on tasks the approved plan assigns to Codex. Create a task branch from `@@BASE_BRANCH@@` for each one.
 - A task is ready to publish when `@@TEST_COMMAND@@` passes, the work is committed, and `ai-eng review check --branch <task-branch>` exits 0 (Claude gave GO on that exact SHA). Then push and open a **draft** PR. Never merge.
-- When Claude asks you to review its commit, review the exact SHA and record it:
+- When Claude asks you to review its commit, review the exact SHA. To run its tests, commit or stash your own work, run `git switch --detach <claude-branch>` (the branch itself is checked out in Claude's worktree), test, then switch back. Record the verdict:
   `ai-eng review record --kind commit --branch <claude-branch> --verdict GO|NO-GO --reviewer codex --author claude --test "..." --finding "..."`
 - Never review your own commits.
 

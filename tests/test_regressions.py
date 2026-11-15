@@ -24,6 +24,20 @@ def test_plan_go_requires_plan_file_and_tracks_its_version(ai, repo):
     assert code == 1 and "not found" in out
 
 
+def test_plan_review_from_conductor_worktree_reads_main_checkout(ai, repo):
+    init_and_commit(ai, repo)
+    assert ai(repo, "worktrees", "--yes")[0] == 0
+    plan = repo / "docs/ai-eng/plans/p.md"  # written by the coordinator, uncommitted, main checkout only
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text("v1\n")
+    codex = repo.parent / "proj.worktrees/codex"
+    code, out = ai(codex, "review", "record", "--plan-id", "p", "--verdict", "GO", "--reviewer", "codex", "--author", "coordinator")
+    assert code == 0, out
+    assert ai(repo, "review", "check", "--plan-id", "p")[0] == 0
+    plan.write_text("v2\n")
+    assert ai(codex, "review", "check", "--plan-id", "p")[0] == 1
+
+
 def test_crlf_file_keeps_crlf(ai, repo):
     (repo / "CLAUDE.md").write_bytes(b"line1\r\nline2\r\n")
     code, out = ai(repo, "init", "--yes")
