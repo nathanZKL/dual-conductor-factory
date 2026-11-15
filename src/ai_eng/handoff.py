@@ -36,15 +36,16 @@ def build(root: Path, cfg: Dict, notes: List[str], online: bool = False) -> str:
         "",
         "## Conductors and worktrees",
         "",
-        "| Conductor | Model | Branch | SHA | Worktree |",
+        "| Conductor | Model | Checked-out branch | SHA | Worktree |",
         "|---|---|---|---|---|",
     ]
-    trees = {w.get("branch"): w for w in worktrees(root)}
+    trees = {w["path"]: w for w in worktrees(root) if "path" in w}
     for name, conductor in cfg["conductors"].items():
-        tree = trees.get(conductor["branch"])
+        tree = trees.get((root / conductor["worktree"]).resolve())
         where = display(tree["path"], root) if tree else "not created"
-        sha = rev(root, "refs/heads/" + conductor["branch"]) or "none"
-        out.append(f"| {conductor.get('label', name)} ({name}) | {conductor['model']} | `{conductor['branch']}` | `{sha}` | {where} |")
+        branch_now = (tree or {}).get("branch") or ("detached HEAD" if tree else "n/a")
+        sha = (tree or {}).get("head") or "none"
+        out.append(f"| {conductor.get('label', name)} ({name}) | {conductor['model']} | `{branch_now}` | `{sha}` | {where} |")
 
     out += ["", "## Branches", "", "| Branch | SHA | Ahead / behind base |", "|---|---|---|"]
     for name, sha in sorted(local_branches(root).items())[:40]:

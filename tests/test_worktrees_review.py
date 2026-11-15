@@ -39,6 +39,10 @@ def test_worktrees_created_isolated_and_idempotent(ai, repo):
     assert after == {k: v for k, v in main_files.items() if not k.startswith(".git/") and k != ".git"}
     code, out = ai(repo, "worktrees", "--yes")
     assert code == 0 and "already exist" in out
+    # A conductor working on a task branch is still a healthy worktree.
+    git(claude, "switch", "-q", "-c", "claude/p1-t1")
+    code, out = ai(repo, "worktrees", "--yes")
+    assert code == 0 and "already exist" in out
 
 
 def test_worktrees_refuse_existing_folder_and_checked_out_branch(ai, repo):

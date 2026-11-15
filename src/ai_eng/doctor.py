@@ -116,7 +116,7 @@ def run_doctor(root: Path, online: bool = False) -> List[Dict]:
     steps, problems = plan_worktrees(root, cfg)
     for step in steps:
         if step["status"] == "exists":
-            add(f"worktree.{step['name']}", "verified", f"{step['branch']} checked out in its own worktree")
+            add(f"worktree.{step['name']}", "verified", f"own worktree, currently on {step['branch']}")
         else:
             add(f"worktree.{step['name']}", "missing", "conductor worktree not created", "Run: ai-eng worktrees")
     for problem in problems:

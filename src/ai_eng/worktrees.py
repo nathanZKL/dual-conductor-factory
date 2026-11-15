@@ -49,10 +49,8 @@ def plan_worktrees(root: Path, cfg: Dict) -> Tuple[List[Dict], List[str]]:
         seen.add(path)
         current = by_path.get(path)
         if current:
-            if current.get("branch") == branch:
-                steps.append({"name": name, "path": path, "branch": branch, "status": "exists"})
-            else:
-                problems.append(f"{name}: {shown} is already a worktree on '{current.get('branch')}', expected '{branch}'")
+            # Conductors switch their worktree to task branches; the path, not the branch, identifies it.
+            steps.append({"name": name, "path": path, "branch": current.get("branch") or "detached HEAD", "status": "exists"})
             continue
         if path.exists():
             problems.append(f"{name}: {shown} already exists and is not a worktree of this repository; refusing to touch it")
