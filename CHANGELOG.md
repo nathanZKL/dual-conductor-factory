@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- README: Homebrew 7 requires `brew trust` for third-party taps; the install steps now say so.
+- `scripts/render_formula.py`: use `formula_opt_bin` (passes `brew style`).
+
 ## 0.1.0
 
 First release.
