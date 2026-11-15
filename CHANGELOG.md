@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+- Orca worker dispatch tested end to end on Orca 1.4.259. Docs and the generated `AGENTS.md` (template v3) now say `orca orchestration worker-start` must run from inside an Orca terminal; elsewhere it fails with `no_active_sender_terminal`. Re-run `ai-eng init` to update existing repositories.
+- README: describe what `ai-eng run` commits, pushes and opens.
+
 ## 0.2.0
 
 - New `ai-eng run`: automates the whole loop with headless agents (`claude -p`, `codex exec`). The coordinator writes the plan and stops for the owner's edit; `ai-eng run --continue <plan-id>` then runs the plan review loop, builds each task in its owner's worktree (Claude Code with its subagents; Codex with implement/test/research/security workers on their configured models), runs the test command itself, commits, gets the other conductor's review at that exact SHA, loops on NO-GO, and pushes and opens a draft PR on GO. State is saved after every step; `--status` and `--continue` resume. Stops on escalation (3 NO-GO), repeated test failures, or the Claude budget (`automation.budget_usd`, default $20).

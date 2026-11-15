@@ -80,7 +80,7 @@ def run_doctor(root: Path, online: bool = False) -> List[Dict]:
             add("orca.runtime", "verified", "Orca runtime is reachable")
         else:
             add("orca.runtime", "blocked", "Orca is installed but its runtime is not reachable", "Start the Orca app: orca open")
-        add("orca.dispatch", "untested", "Orca worker dispatch and completion reporting have not been exercised by ai-eng")
+        add("orca.dispatch", "untested", "Orca worker dispatch is not checked on this machine; it must be started from inside an Orca terminal (see docs/orchestration.md)")
 
     # Config and managed files
     try:
