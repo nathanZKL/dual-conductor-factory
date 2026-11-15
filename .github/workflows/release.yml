@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - name: Tag must match the package version
+        run: |
+          ver=$(uv run --no-project --python 3.13 python -c "import re;print(re.search(r'__version__ = \"(.+)\"', open('src/ai_eng/__init__.py').read()).group(1))")
+          test "v$ver" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME does not match version $ver"; exit 1; }
+      - name: Tests
+        run: uv run --no-project --python 3.13 --with pytest python -m pytest -q
+      - name: Build and smoke-test artifacts
+        run: uv run --no-project --python 3.13 python scripts/build_release.py --smoke
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "dist/*"
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          uv run --no-project --python 3.13 python scripts/build_release.py --notes > notes.md
+          gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag
