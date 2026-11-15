@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - name: Unit, integration and safety tests
+        run: uv run --no-project --python ${{ matrix.python }} --with pytest python -m pytest -q
+      - name: Build the zipapp and smoke-test it
+        run: uv run --no-project --python ${{ matrix.python }} python scripts/build_release.py --pyz-only --smoke
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - name: Build pyz, wheel, sdist and checksums
+        run: uv run --no-project --python 3.13 python scripts/build_release.py --smoke
+      - name: Wheel installs and runs
+        run: |
+          uv tool install dist/*.whl
+          ai-eng --version
+
+  tests-pass:
+    if: always()
+    needs: [test, package]
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.test.result }}" = success && test "${{ needs.package.result }}" = success
