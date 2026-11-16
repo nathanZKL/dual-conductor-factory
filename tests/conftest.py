@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from ai_eng import cli
+from ai_eng.config import DEFAULT_SKILLS
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -26,6 +27,22 @@ def isolated_git(monkeypatch):
         monkeypatch.setenv(var, "Test")
     for var in ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"):
         monkeypatch.setenv(var, "test@example.com")
+
+
+@pytest.fixture(autouse=True)
+def installed_skills(tmp_path, monkeypatch):
+    """Claude and Codex homes with every default required skill installed as a plugin skill."""
+    homes = {}
+    for agent, var in (("claude", "CLAUDE_CONFIG_DIR"), ("codex", "CODEX_HOME")):
+        home = tmp_path / f"{agent}-home"
+        for name in {n for steps in DEFAULT_SKILLS[agent].values() for n in steps}:
+            plugin, skill = name.split(":")
+            path = home / "plugins/cache/market" / plugin / "1.0.0/skills" / skill / "SKILL.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"# {skill}\n")
+        monkeypatch.setenv(var, str(home))
+        homes[agent] = home
+    return homes
 
 
 @pytest.fixture

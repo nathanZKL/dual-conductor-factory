@@ -100,6 +100,7 @@ def test_full_loop_cross_reviews_and_opens_draft_prs(ai, auto):
     # Claude runs with a tool allowlist and never stops to ask; the Claude reviewer cannot edit.
     claude_review = next(c for c in calls if c["agent"] == "claude" and c["role"] == "review-commit")
     assert "dontAsk" in claude_review["args"] and "Edit" not in claude_review["args"]
+    assert all("Skill" in c["args"] for c in calls if c["agent"] == "claude")  # workers may load installed skills
     # Builders work in their own worktree; Codex used its role workers incl. security for T2.
     assert any(c["agent"] == "claude" and c["role"] == "build" and c["cwd"] == "claude" for c in calls)
     assert [c["role"] for c in calls if c["agent"] == "codex" and c["task"] == "T2"] == ["implement", "test", "security"]
@@ -185,6 +186,74 @@ def test_new_review_worktree_waits_for_orca_discovery(ai, auto):
     ai(auto.root, "run", "Add a feature")
     code, out = ai(auto.root, "run", "--continue", "add-a-feature")
     assert code == 0, out
+
+
+def test_required_skills_are_named_and_checked(ai, auto):
+    ai(auto.root, "run", "Add a feature")
+    code, out = ai(auto.root, "run", "--continue", "add-a-feature")
+    assert code == 0, out
+    specs = {p.name: p.read_text() for p in (auto.root / ".git/ai-eng/runs/add-a-feature").glob("*.spec.md")}
+    claude_build = next(t for n, t in specs.items() if "claude-build-T1" in n)
+    assert "load each one with your Skill tool" in claude_build and "`superpowers:test-driven-development`" in claude_build
+    assert "Tell `implementer` and `tester` to load and follow these skills too" in claude_build
+    codex_test = next(t for n, t in specs.items() if "codex-test-T2" in n)
+    assert "read each one's SKILL.md in full" in codex_test and "`superpowers:verification-before-completion`" in codex_test
+    assert "skills/verification-before-completion/SKILL.md)" in codex_test.replace("\\", "/")  # the installed file's path
+    assert "Required skills" not in next(t for n, t in specs.items() if "review-plan" in n)  # no requirement: no note
+
+
+def test_worker_that_skips_skills_is_reminded_then_passes(ai, auto):
+    auto.scenario(skip_skills="AI-ENG-ROLE: implement")
+    ai(auto.root, "run", "Add a feature")
+    code, out = ai(auto.root, "run", "--continue", "add-a-feature")
+    assert code == 0, out
+    log = next((auto.root / ".git/ai-eng/runs/add-a-feature").glob("*codex-implement-T2.log")).read_text()
+    assert "reminded the worker to load skills: superpowers:test-driven-development" in log
+
+
+def test_worker_that_never_loads_skills_stops_the_lane(ai, auto):
+    auto.scenario(skip_skills="AI-ENG-ROLE: implement", skills_never=True)
+    ai(auto.root, "run", "Add a feature")
+    code, out = ai(auto.root, "run", "--continue", "add-a-feature")
+    assert code == 2 and "did not load required skills: superpowers:test-driven-development" in out
+    assert auto.state()["tasks"]["T1"]["status"] == "published"  # the other lane is unaffected
+
+
+def test_skills_can_be_changed_in_config(ai, auto):
+    cfg_path = auto.root / ".ai-eng/config.json"
+    cfg = json.loads(cfg_path.read_text())
+    cfg["skills"]["codex"]["implement"] = []
+    cfg_path.write_text(json.dumps(cfg))
+    auto.scenario(skip_skills="AI-ENG-ROLE: implement", skills_never=True)
+    ai(auto.root, "run", "Add a feature")
+    code, out = ai(auto.root, "run", "--continue", "add-a-feature")
+    assert code == 0, out
+    cfg["skills"]["codex"]["nonsense"] = []
+    cfg_path.write_text(json.dumps(cfg))
+    code, out = ai(auto.root, "run", "--status")
+    assert code != 0 and "skills.codex.nonsense: unknown step" in out
+
+
+def test_run_refuses_to_start_when_a_required_skill_is_not_installed(ai, auto, installed_skills):
+    skill = installed_skills["codex"] / "plugins/cache/market/superpowers/1.0.0/skills/systematic-debugging/SKILL.md"
+    skill.unlink()
+    code, out = ai(auto.root, "run", "Add a feature")
+    assert code == 1 and "required skills are not installed: codex: superpowers:systematic-debugging" in out
+    assert auto.calls() == []  # no agent was started
+    code, out = ai(auto.root, "doctor")
+    assert "codex: superpowers:systematic-debugging" in out
+
+
+def test_codex_must_read_the_skill_file_not_just_name_it():
+    from ai_eng.agents import missing_skills
+    named = [{"role": "assistant", "blocks": [{"type": "tool-call", "name": "exec_command",
+                                               "input": {"cmd": "rg test-driven-development"}}]}]
+    read = [{"role": "assistant", "blocks": [{"type": "tool-call", "name": "exec_command",
+                                              "input": {"cmd": "sed -n 1,200p /p/skills/test-driven-development/SKILL.md"}}]}]
+    tdd = ["superpowers:test-driven-development"]
+    assert missing_skills(named, tdd, "codex") == tdd
+    assert missing_skills(read, tdd, "codex") == []
+    assert missing_skills(named, tdd, "claude") == []  # Claude's Skill tool call names the skill
 
 
 def test_cross_lane_dependency_builds_on_the_other_task(ai, auto):

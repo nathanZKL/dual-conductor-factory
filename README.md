@@ -28,16 +28,16 @@ The formula ([nathanZKL/homebrew-tap](https://github.com/nathanZKL/homebrew-tap)
 **macOS or Linux (release file)**
 
 ```bash
-curl -LO https://github.com/nathanZKL/dual-conductor-factory/releases/download/v0.3.0/ai-eng-0.3.0.pyz
-curl -LO https://github.com/nathanZKL/dual-conductor-factory/releases/download/v0.3.0/SHA256SUMS
+curl -LO https://github.com/nathanZKL/dual-conductor-factory/releases/download/v0.4.0/ai-eng-0.4.0.pyz
+curl -LO https://github.com/nathanZKL/dual-conductor-factory/releases/download/v0.4.0/SHA256SUMS
 shasum -a 256 --check --ignore-missing SHA256SUMS
-python3 ai-eng-0.3.0.pyz --version
+python3 ai-eng-0.4.0.pyz --version
 ```
 
 **Windows (PowerShell, with [uv](https://docs.astral.sh/uv/))**
 
 ```powershell
-$v = "0.3.0"
+$v = "0.4.0"
 Invoke-WebRequest "https://github.com/nathanZKL/dual-conductor-factory/releases/download/v$v/ai_eng-$v-py3-none-any.whl" -OutFile "ai_eng-$v-py3-none-any.whl"
 Invoke-WebRequest "https://github.com/nathanZKL/dual-conductor-factory/releases/download/v$v/SHA256SUMS" -OutFile SHA256SUMS
 (Get-FileHash "ai_eng-$v-py3-none-any.whl" -Algorithm SHA256).Hash.ToLower()   # must match the line in SHA256SUMS

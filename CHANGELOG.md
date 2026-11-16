@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0
+
+- Claude Orca workers may use the Skill tool, so they can load your installed skills. Before this, `--permission-mode dontAsk` denied every skill call. The `implementer` and `tester` subagents get the Skill tool too (template v5: re-run `ai-eng init` to update existing repositories). `researcher` and `security-reviewer` are unchanged.
+- Required skills per step, set in `.ai-eng/config.json` under `skills` (defaults: TDD and verification for builds and tests, systematic debugging and receiving-code-review for fixes). Each worker's task names its skills, and ai-eng checks the Orca transcript that they were loaded. A worker that skipped one is reminded once; if it still hasn't, the step fails. Claude's `implementer` and `tester` subagents preload the `skills.claude.build` skills through their frontmatter `skills:` field, so Claude Code injects them at startup (re-run `ai-eng init` after changing the list).
+- `ai-eng run` refuses to start when a required skill is not installed for the agent that needs it, and `ai-eng doctor` reports it. Codex workers are given each skill's installed `SKILL.md` path and must read that file; naming the skill is no longer enough.
+- Tested end to end in Orca with real Claude Code and Codex on a GitHub repository: plan GO, Claude build with its `implementer` and `tester` subagents (both started with the skills preloaded), Codex implement and test workers, cross reviews GO, pushes, and stacked draft PRs. Every worker loaded its required skills without a reminder.
+
 ## 0.3.0
 
 - `ai-eng run` now starts every agent as an Orca worker, with Orca as the home base. Run it from a terminal inside Orca. It refuses to start elsewhere, or when the repository is not in Orca. Each step gets its own Orca terminal with the exact model and permissions ai-eng chose:

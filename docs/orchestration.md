@@ -27,6 +27,28 @@ For each agent step, ai-eng:
 
 Claude's tasks and Codex's tasks run in parallel, one lane per conductor. A task that depends on the other conductor's task waits for it and builds on top of its branch. Reviews use separate review worktrees, so a reviewer never disturbs its own conductor's work. State and per-step logs (with each worker's task and report) live in `.git/ai-eng/runs/`.
 
+### Required skills
+
+Each kind of step has a list of skills its worker must load, set in `.ai-eng/config.json` under `skills`. Repositories without that key use these defaults:
+
+| Agent | Step | Default skills |
+|---|---|---|
+| Claude | `plan`, `review` | none |
+| Claude | `build` | `superpowers:test-driven-development`, `superpowers:verification-before-completion` (also passed on to `implementer` and `tester`) |
+| Claude | `fix` (after failing tests or a NO-GO) | `superpowers:systematic-debugging`, `superpowers:receiving-code-review` |
+| Codex | `plan_review`, `research`, `security`, `review` | none |
+| Codex | `implement` | `superpowers:test-driven-development` |
+| Codex | `test` | `superpowers:test-driven-development`, `superpowers:verification-before-completion` |
+| Codex | `fix` | `superpowers:systematic-debugging`, `superpowers:receiving-code-review` |
+
+How each step is enforced:
+1. Before any agent starts, ai-eng checks that every listed skill is installed for the agent that needs it, and refuses to run if one is missing. `ai-eng doctor` reports the same check. A `plugin:skill` name is looked up in that agent's plugin cache (`~/.claude/plugins/cache`, `~/.codex/plugins/cache`); a bare name in its skill folders (`~/.claude/skills` and `.claude/skills`; `~/.codex/skills`, `~/.agents/skills`, `.agents/skills` and `.codex/skills`).
+2. The worker's task names the skills. A Codex task also gives the installed `SKILL.md` path.
+3. When it finishes, ai-eng checks its Orca transcript: Claude must name each skill in a tool call (its Skill tool); Codex must read each skill's `SKILL.md`.
+4. A worker that skipped a skill is reminded once. If it still hasn't loaded it, the step fails and the run stops for you.
+
+Claude's `implementer` and `tester` subagents get the `skills.claude.build` list in their frontmatter (`skills:`), so Claude Code preloads the full skill text when each subagent starts; the subagent does not choose. Change the list, then re-run `ai-eng init` to rewrite the agent files. Claude Code skips a listed skill that is not installed (it logs a warning to its debug log only), so install every listed skill first.
+
 Spending is not capped: Claude's `--max-budget-usd` only works in headless print mode, so `automation.budget_usd` is not enforced. Runs are bounded by `agent_timeout_minutes`, `max_fix_attempts` and the NO-GO round limit.
 
 ## Manual (interactive sessions)

@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from .config import DEFAULT_SKILLS, skills_for
 from .util import redact, run, write_text
 
 REPORT = ("\n\nWhen you are done, report with worker_done. The report body must be your final reply as described above "
@@ -71,7 +72,8 @@ def claude_command(model: str, tools: List[str]) -> List[str]:
     # dontAsk: anything outside the allowlist is denied instead of stopping to ask, so workers never stall.
     # Workers report through the orca CLI, so that one command family must be allowed.
     report = ["Bash(orca orchestration send:*)", "Bash(orca orchestration ask:*)"]
-    return ["claude", "--model", model, "--permission-mode", "dontAsk", "--allowedTools", *tools, *report]
+    # Skill: let workers load the owner's installed skills (dontAsk would otherwise deny every skill call).
+    return ["claude", "--model", model, "--permission-mode", "dontAsk", "--allowedTools", *tools, "Skill", *report]
 
 
 def codex_command(model: str, effort: str, sandbox: str) -> List[str]:
@@ -154,25 +156,81 @@ def _wait_ready(term: str, title: str, deadline: float, say: Callable[[str], Non
             time.sleep(3)
 
 
-def final_reply(dispatch_id: str) -> str:
-    """The worker's last assistant text in its Orca transcript, or ''."""
-    last, cursor = "", None
+def transcript(dispatch_id: str) -> List[Dict]:
+    """Every message in the worker's Orca transcript."""
+    messages, cursor = [], None
     for _ in range(100):  # pages of 50 messages; a step never gets near this
         page = orca("orchestration", "worker-read", "--dispatch", dispatch_id, "--source", "transcript", "--limit", "50",
                     *(["--cursor", cursor] if cursor else []), timeout=60).get("transcript") or {}
-        for msg in page.get("messages") or []:
-            text = "".join(b.get("text", "") for b in msg.get("blocks") or [] if b.get("type") == "text").strip()
-            if msg.get("role") == "assistant" and text:
-                last = text
+        messages += page.get("messages") or []
         cursor = page.get("nextCursor")
         if not page.get("limited") or not cursor or not page.get("messages"):
-            return last
+            break
+    return messages
+
+
+def final_reply(messages: List[Dict]) -> str:
+    """The last assistant text in a transcript, or ''."""
+    last = ""
+    for msg in messages:
+        text = "".join(b.get("text", "") for b in msg.get("blocks") or [] if b.get("type") == "text").strip()
+        if msg.get("role") == "assistant" and text:
+            last = text
     return last
 
 
+def skill_file(agent: str, name: str, root: Path) -> Optional[Path]:
+    """The installed SKILL.md for `name` as `agent` would find it, or None. `plugin:skill` is looked up in that
+    agent's plugin cache; a bare name in its user and project skill folders."""
+    home = Path.home()
+    plugin, _, skill = name.rpartition(":")
+    agent_home = Path(os.environ.get("CLAUDE_CONFIG_DIR") or home / ".claude") if agent == "claude" \
+        else Path(os.environ.get("CODEX_HOME") or home / ".codex")
+    if plugin:
+        # shortcut: finds installed plugins, not whether they are enabled; check settings if that bites.
+        hits = sorted((agent_home / "plugins" / "cache").glob(f"*/{plugin}/*/skills/{skill}/SKILL.md"))
+        return hits[-1] if hits else None
+    dirs = [agent_home / "skills", root / ".claude/skills"] if agent == "claude" \
+        else [agent_home / "skills", home / ".agents/skills", root / ".agents/skills", root / ".codex/skills"]
+    return next((d / skill / "SKILL.md" for d in dirs if (d / skill / "SKILL.md").is_file()), None)
+
+
+def missing_installed_skills(root: Path, cfg: Dict) -> List[str]:
+    """Every configured skill the agent that needs it cannot find, as `agent: name`."""
+    out = []
+    for agent in ("claude", "codex"):
+        names = {name for step in DEFAULT_SKILLS[agent] for name in skills_for(cfg, agent, step)}
+        out += [f"{agent}: {name}" for name in sorted(names) if skill_file(agent, name, root) is None]
+    return out
+
+
+def missing_skills(messages: List[Dict], skills: List[str], agent: str = "claude") -> List[str]:
+    """Required skills the worker never loaded: Claude names the skill in a tool call (its Skill tool, or reading
+    the file); Codex must read the skill's SKILL.md."""
+    calls = " ".join(json.dumps(b) for m in messages for b in m.get("blocks") or [] if b.get("type") == "tool-call")
+    calls = calls.replace("\\\\", "/")  # Windows paths, as JSON-escaped backslashes
+    need = (lambda s: s) if agent == "claude" else (lambda s: f"{s}/SKILL.md")
+    return [s for s in skills if need(s.split(":")[-1]) not in calls]
+
+
+def skills_note(agent: str, skills: List[str], root: Optional[Path] = None) -> str:
+    if not skills:
+        return ""
+    if agent == "claude":
+        how, names = "load each one with your Skill tool", ", ".join(f"`{s}`" for s in skills)
+    else:
+        how = "read each one's SKILL.md in full"
+        names = ", ".join(f"`{s}` ({skill_file(agent, s, root) if root else 'SKILL.md'})" for s in skills)
+    return (f"\n\nRequired skills: before you start, {how} and follow it: {names}. ai-eng checks that you loaded them; "
+            "if one is not installed, say so in your final reply.")
+
+
 def run_agent(mail: Mailbox, cwd: Path, argv: List[str], prompt: str, title: str, timeout_s: int, log: Path,
-              say: Callable[[str], None]) -> str:
-    """Start `argv` in a new Orca terminal in `cwd`, give it `prompt` as a worker task, return its report body."""
+              say: Callable[[str], None], skills: List[str] = ()) -> str:
+    """Start `argv` in a new Orca terminal in `cwd`, give it `prompt` as a worker task, return its report body.
+    The worker must load every skill in `skills`; one that skips any is reminded once, then the step fails."""
+    skills = list(skills)
+    prompt += skills_note(argv[0], skills, cwd)
     deadline = time.monotonic() + timeout_s
     command = shell_join(argv)
     for attempt in range(30):  # Orca discovers a just-created worktree (ai-eng's review checkouts) after a short lag
@@ -192,32 +250,45 @@ def run_agent(mail: Mailbox, cwd: Path, argv: List[str], prompt: str, title: str
         did = orca("orchestration", "worker-start", "--terminal", term, "--worktree", f"path:{cwd}", "--spec-file", str(spec),
                    "--task-title", title, timeout=180)["dispatchId"]
         lines.append(f"dispatch {did}")
-        nudged = False
+        nudged = skills_reminded = False
         while True:
             msg = mail.wait(did, deadline)
             if msg is None:
                 _quiet("orchestration", "worker-stop", "--dispatch", did)
                 raise AgentError(f"timed out after {timeout_s}s (its Orca worker was stopped)")
             report = str(msg.get("body") or "")
-            if msg.get("type") == "worker_done":
-                return report
-            stop = (msg.get("payload") or {}).get("stopReason")
-            if stop in ("lost", "exited"):
+            done = msg.get("type") == "worker_done"
+            if not done and (msg.get("payload") or {}).get("stopReason") in ("lost", "exited"):
                 raise AgentError(f"the Orca worker stopped without reporting: {report[:300]}")
-            # It ended its turn without worker_done but is still there: its final reply is the report.
-            reply = final_reply(did)
-            if reply:
+            messages = transcript(did) if skills or not done else []
+            if not done:
+                # It ended its turn without worker_done but is still there: its final reply is the report.
+                reply = final_reply(messages)
+                if not reply:
+                    if nudged:
+                        raise AgentError(f"the Orca worker ended its turn twice without a reply: {report[:300]}")
+                    nudged = True  # remind it once
+                    lines.append("reminded the worker to send worker_done")
+                    orca("orchestration", "send", "--to", f"dispatch:{did}", "--subject", "Report now",
+                         "--body", "You ended your turn without worker_done. Finish the task if needed, then report "
+                                   "with worker_done; the report body must be your final reply as the task describes.")
+                    continue
+                report = reply
                 lines.append("report read from the worker's transcript")
+            missing = missing_skills(messages, skills, argv[0])
+            if missing:
+                if skills_reminded:
+                    raise AgentError(f"the worker did not load required skills: {', '.join(missing)}. If they are not "
+                                     "installed, change `skills` in .ai-eng/config.json")
+                skills_reminded = True
+                lines.append(f"reminded the worker to load skills: {', '.join(missing)}")
+                orca("orchestration", "send", "--to", f"dispatch:{did}", "--subject", "Load the required skills",
+                     "--body", f"You did not load these required skills: {', '.join(missing)}. Load each one now, "
+                               "check your work against it, fix anything it calls for, then finish the same way as before.")
+                continue
+            if not done:
                 _quiet("orchestration", "worker-stop", "--dispatch", did)
-                return reply
-            if nudged:
-                raise AgentError(f"the Orca worker ended its turn twice without a reply: {report[:300]}")
-            # It ended its turn without worker_done but is still there: remind it once.
-            nudged = True
-            lines.append("reminded the worker to send worker_done")
-            orca("orchestration", "send", "--to", f"dispatch:{did}", "--subject", "Report now",
-                 "--body", "You ended your turn without worker_done. Finish the task if needed, then report with "
-                           "worker_done; the report body must be your final reply as the task describes.")
+            return report
     finally:
         write_text(log, redact("\n".join(lines + ["", "--- task", prompt, "", "--- report", report])) + "\n")
         _quiet("terminal", "close", "--terminal", term)

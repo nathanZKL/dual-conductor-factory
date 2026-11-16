@@ -6,7 +6,7 @@ import re
 from typing import Dict, List, Tuple
 
 from . import TEMPLATE_VERSION
-from .config import ROLES
+from .config import ROLES, skills_for
 
 # How a target file is owned:
 BLOCK = "block"            # Markdown: ai-eng owns one marked block; user text around it is kept.
@@ -78,6 +78,9 @@ def values(cfg: Dict) -> Dict[str, object]:
             f"| {spec['codex']['model']} ({spec['codex'].get('effort', 'default')}) |"
         )
     out["SUBAGENT_TABLE"] = "\n".join(rows)
+    # Claude Code preloads these into the subagent at startup (frontmatter `skills:`), so it cannot skip them.
+    build = skills_for(cfg, "claude", "build")
+    out["BUILD_SKILLS"] = "".join(["skills:\n"] + [f"  - {name}\n" for name in build]) if build else ""
     return out
 
 

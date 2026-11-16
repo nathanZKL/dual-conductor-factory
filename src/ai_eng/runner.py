@@ -21,8 +21,9 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from . import review
-from .agents import AgentError, Mailbox, claude_command, codex_command, extract_json, preflight, run_agent
-from .config import ROLES
+from .agents import (AgentError, Mailbox, claude_command, codex_command, extract_json, missing_installed_skills,
+                     preflight, run_agent)
+from .config import ROLES, skills_for
 from .gitrepo import common_dir, current_branch, dirty_paths, git, origin_url, rev
 from .util import read_text, run, run_tree, write_text
 from .worktrees import plan_worktrees
@@ -165,19 +166,24 @@ class Run:
         parts = [p.strip() for p in re.split(r"&&|\|\||;|\|", self.test_command()) if p.strip()]
         return [f"Bash({p}:*)" for p in parts] + [f"Bash({c}:*)" for c in ("git status", "git diff", "git log", "git show")]
 
-    def claude(self, cwd: Path, prompt: str, tools: List[str], step: str, model: Optional[str] = None) -> str:
-        return self._agent(claude_command(model or self.cfg["conductors"]["claude"]["model"], tools), cwd, prompt, step)
+    def skills(self, agent: str, kind: str) -> List[str]:
+        return skills_for(self.cfg, agent, kind)
 
-    def codex(self, cwd: Path, prompt: str, sandbox: str, step: str, role: Optional[str] = None) -> str:
+    def claude(self, cwd: Path, prompt: str, tools: List[str], step: str, kind: str, model: Optional[str] = None) -> str:
+        return self._agent(claude_command(model or self.cfg["conductors"]["claude"]["model"], tools), cwd, prompt, step,
+                           self.skills("claude", kind))
+
+    def codex(self, cwd: Path, prompt: str, sandbox: str, step: str, kind: str, role: Optional[str] = None) -> str:
         spec = self.cfg["subagents"][role]["codex"] if role else self.cfg["conductors"]["codex"]
-        return self._agent(codex_command(spec["model"], spec.get("effort", "medium"), sandbox), cwd, prompt, step)
+        return self._agent(codex_command(spec["model"], spec.get("effort", "medium"), sandbox), cwd, prompt, step,
+                           self.skills("codex", kind))
 
-    def _agent(self, argv: List[str], cwd: Path, prompt: str, step: str) -> str:
+    def _agent(self, argv: List[str], cwd: Path, prompt: str, step: str, skills: List[str]) -> str:
         log = self.new_log(step)
         with self.unlocked():
             try:
                 return run_agent(self.mail, cwd, argv, prompt, f"ai-eng {self.plan_id} {step}",
-                                 int(self.opts["agent_timeout_minutes"] * 60), log, self.say)
+                                 int(self.opts["agent_timeout_minutes"] * 60), log, self.say, skills)
             except AgentError as exc:
                 raise RunStop(f"{step}: {exc}. Log: {log}")
 
@@ -209,7 +215,7 @@ class Run:
     def write_plan(self, prompt: str, step: str) -> None:
         before = set(dirty_paths(self.root))
         tools = READ_TOOLS + [f"Write({self.plan_rel})", f"Edit({self.plan_rel})"]
-        self.claude(self.root, prompt, tools, step, model=self.cfg["coordinator"]["model"])
+        self.claude(self.root, prompt, tools, step, "plan", model=self.cfg["coordinator"]["model"])
         stray = set(dirty_paths(self.root)) - before - {self.plan_rel, "docs/ai-eng/plans/", "docs/ai-eng/"}
         stray = {p for p in stray if not p.startswith("docs/ai-eng/plans/")}
         if stray:
@@ -239,7 +245,7 @@ class Run:
                 continue
             self.tasks()  # never send an invalid task list to review
             self.say(f"[plan] Codex ({self.cfg['conductors']['codex']['model']}) reviewing the plan")
-            result = self.verdict(self.codex(self.root, prompt_review_plan(self), "read-only", "codex-review-plan"),
+            result = self.verdict(self.codex(self.root, prompt_review_plan(self), "read-only", "codex-review-plan", "plan_review"),
                                   "plan review")
             try:
                 review.record(self.root, "plan", self.plan_id, result["verdict"], "codex", "coordinator", current,
@@ -277,25 +283,26 @@ class Run:
                 tools += ["WebSearch", "WebFetch"]
             self.say(f"[{tid}] Claude Code conductor building (subagents: implementer, tester"
                      + "".join(f", {s}" for s in task.get("subagents") or []) + ")")
-            self.claude(wt, prompt_build_claude(self, task, findings, failure), tools, f"claude-build-{tid}")
+            self.claude(wt, prompt_build_claude(self, task, findings, failure), tools, f"claude-build-{tid}",
+                        "fix" if findings or failure else "build")
             return
         notes = ""
         if "research" in (task.get("subagents") or []) and not findings and not failure:
             self.say(f"[{tid}] Codex research worker")
-            notes = self.codex(wt, prompt_codex_role(self, task, "research"), "read-only", f"codex-research-{tid}", "research")
+            notes = self.codex(wt, prompt_codex_role(self, task, "research"), "read-only", f"codex-research-{tid}", "research", "research")
         self.say(f"[{tid}] Codex implement worker")
         self.codex(wt, prompt_codex_role(self, task, "implement", notes, findings, failure), "workspace-write",
-                   f"codex-implement-{tid}", "implement")
+                   f"codex-implement-{tid}", "fix" if findings or failure else "implement", "implement")
         self.say(f"[{tid}] Codex test worker")
-        self.codex(wt, prompt_codex_role(self, task, "test"), "workspace-write", f"codex-test-{tid}", "test")
+        self.codex(wt, prompt_codex_role(self, task, "test"), "workspace-write", f"codex-test-{tid}", "test", "test")
         if "security" in (task.get("subagents") or []):
             self.say(f"[{tid}] Codex security worker")
             sec = self.verdict(self.codex(wt, prompt_codex_role(self, task, "security"), "read-only",
-                                          f"codex-security-{tid}", "security"), "security review")
+                                          f"codex-security-{tid}", "security", "security"), "security review")
             if sec["verdict"] == "NO-GO":
                 self.say(f"[{tid}] Codex implement worker fixing {len(sec['findings'])} security finding(s)")
                 self.codex(wt, prompt_codex_role(self, task, "implement", findings=sec["findings"]), "workspace-write",
-                           f"codex-implement-security-{tid}", "implement")
+                           f"codex-implement-security-{tid}", "fix", "implement")
 
     def run_tests(self, wt: Path) -> tuple:
         with self.unlocked():
@@ -351,9 +358,9 @@ class Run:
         prompt = prompt_review_commit(self, task, owner, reviewer, branch, sha, diff, tests)
         self.say(f"[{task['id']}] {reviewer} reviewing {sha[:12]}")
         if reviewer == "claude":
-            text = self.claude(rwt, prompt, READ_TOOLS + self.bash_allow(), f"claude-review-{task['id']}")
+            text = self.claude(rwt, prompt, READ_TOOLS + self.bash_allow(), f"claude-review-{task['id']}", "review")
         else:
-            text = self.codex(rwt, prompt, "read-only", f"codex-review-{task['id']}")
+            text = self.codex(rwt, prompt, "read-only", f"codex-review-{task['id']}", "review")
         if dirty_paths(rwt):
             raise RunStop(f"[{task['id']}] the {reviewer} reviewer changed files in {rwt}; its verdict was not recorded")
         return self.verdict(text, f"{task['id']} review")
@@ -511,6 +518,10 @@ def _preflight(root: Path, cfg: Dict, full: bool) -> None:
         raise RunStop(problem, 1)
     if not (cfg["project"].get("test_command") or "").strip():
         raise RunStop("set project.test_command in .ai-eng/config.json: ai-eng runs it before every commit", 1)
+    absent = missing_installed_skills(root, cfg)
+    if absent:
+        raise RunStop(f"required skills are not installed: {'; '.join(absent)}. Install them, or change `skills` "
+                      "in .ai-eng/config.json (then run `ai-eng init` to update the Claude subagents)", 1)
     if full:
         steps, problems = plan_worktrees(root, cfg)
         if problems or any(s["status"] != "exists" for s in steps):
@@ -674,6 +685,9 @@ def _fix_section(findings: Optional[List[str]], failure: str) -> str:
 
 def prompt_build_claude(run_: Run, task: dict, findings: Optional[List[str]], failure: str) -> str:
     extra = [{"research": "`researcher`", "security": "`security-reviewer`"}[s] for s in task.get("subagents") or []]
+    skills = run_.skills("claude", "fix" if findings or failure else "build")
+    skills_line = ("\n- Tell `implementer` and `tester` to load and follow these skills too: "
+                   + ", ".join(f"`{s}`" for s in skills) + ".") if skills else ""
     return f"""AI-ENG-ROLE: build
 AI-ENG-TASK: {task['id']}
 
@@ -688,7 +702,7 @@ Full plan for context:
 -----
 {_fix_section(findings, failure)}
 How to work:
-- Use your subagents: `implementer` writes the code, `tester` writes and runs the tests{''.join(', ' + e for e in extra)}.
+- Use your subagents: `implementer` writes the code, `tester` writes and runs the tests{''.join(', ' + e for e in extra)}.{skills_line}
 - Change only this task's files and their tests. Do not commit, push, or switch branches: ai-eng runs `{run_.test_command()}` itself, commits, and sends the commit to Codex for review.
 - Finish only when `{run_.test_command()}` passes.
 

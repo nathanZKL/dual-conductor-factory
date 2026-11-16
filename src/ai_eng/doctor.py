@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from .agents import missing_installed_skills
 from .config import ConfigError, load_config, load_manifest
 from .gitrepo import current_branch, dirty_paths, origin_url, rev
 from .planner import plan
@@ -128,6 +129,12 @@ def run_doctor(root: Path, online: bool = False) -> List[Dict]:
     add("models", "untested", "model IDs are not validated against providers: " + ", ".join(models),
         "Start each agent once with its model to confirm it is available on your plan")
     add("subagents.claude", "untested", "Claude Code subagent files exist; loading them has not been exercised")
+    absent = missing_installed_skills(root, cfg)
+    if absent:
+        add("skills", "missing", "required skills not installed: " + "; ".join(absent),
+            "Install them, or change `skills` in .ai-eng/config.json and run `ai-eng init`", level="fail")
+    else:
+        add("skills", "verified", "every required skill in .ai-eng/config.json is installed")
     add("messaging", "untested", "direct Claude <-> Codex messaging is not set up by ai-eng; hand off through the owner or Orca")
 
     # Reviews
