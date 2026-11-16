@@ -42,11 +42,10 @@ Each kind of step has a list of skills its worker must load, set in `.ai-eng/con
 | Codex | `fix` | `superpowers:systematic-debugging`, `superpowers:receiving-code-review` |
 
 How each step is enforced:
-1. The worker's task names the skills.
-2. When it finishes, ai-eng checks its Orca transcript for a tool call that loads each one: Claude's Skill tool, or Codex opening the skill's `SKILL.md`.
-3. A worker that skipped a skill is reminded once. If it still hasn't loaded it, the step fails and the run stops for you.
-
-If a skill is not installed on your machine, remove it from the list or install it.
+1. Before any agent starts, ai-eng checks that every listed skill is installed for the agent that needs it, and refuses to run if one is missing. `ai-eng doctor` reports the same check. A `plugin:skill` name is looked up in that agent's plugin cache (`~/.claude/plugins/cache`, `~/.codex/plugins/cache`); a bare name in its skill folders (`~/.claude/skills` and `.claude/skills`; `~/.codex/skills`, `~/.agents/skills`, `.agents/skills` and `.codex/skills`).
+2. The worker's task names the skills. A Codex task also gives the installed `SKILL.md` path.
+3. When it finishes, ai-eng checks its Orca transcript: Claude must name each skill in a tool call (its Skill tool); Codex must read each skill's `SKILL.md`.
+4. A worker that skipped a skill is reminded once. If it still hasn't loaded it, the step fails and the run stops for you.
 
 Claude's `implementer` and `tester` subagents get the `skills.claude.build` list in their frontmatter (`skills:`), so Claude Code preloads the full skill text when each subagent starts; the subagent does not choose. Change the list, then re-run `ai-eng init` to rewrite the agent files. Claude Code skips a listed skill that is not installed (it logs a warning to its debug log only), so install every listed skill first.
 

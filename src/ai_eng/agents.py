@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from .config import DEFAULT_SKILLS, skills_for
 from .util import redact, run, write_text
 
 REPORT = ("\n\nWhen you are done, report with worker_done. The report body must be your final reply as described above "
@@ -178,18 +179,48 @@ def final_reply(messages: List[Dict]) -> str:
     return last
 
 
-def missing_skills(messages: List[Dict], skills: List[str]) -> List[str]:
-    """Required skills the worker never loaded. Claude loads one with its Skill tool; Codex opens its SKILL.md.
-    Either way the skill's own name (after any `plugin:` prefix) appears in a tool call."""
+def skill_file(agent: str, name: str, root: Path) -> Optional[Path]:
+    """The installed SKILL.md for `name` as `agent` would find it, or None. `plugin:skill` is looked up in that
+    agent's plugin cache; a bare name in its user and project skill folders."""
+    home = Path.home()
+    plugin, _, skill = name.rpartition(":")
+    agent_home = Path(os.environ.get("CLAUDE_CONFIG_DIR") or home / ".claude") if agent == "claude" \
+        else Path(os.environ.get("CODEX_HOME") or home / ".codex")
+    if plugin:
+        # shortcut: finds installed plugins, not whether they are enabled; check settings if that bites.
+        hits = sorted((agent_home / "plugins" / "cache").glob(f"*/{plugin}/*/skills/{skill}/SKILL.md"))
+        return hits[-1] if hits else None
+    dirs = [agent_home / "skills", root / ".claude/skills"] if agent == "claude" \
+        else [agent_home / "skills", home / ".agents/skills", root / ".agents/skills", root / ".codex/skills"]
+    return next((d / skill / "SKILL.md" for d in dirs if (d / skill / "SKILL.md").is_file()), None)
+
+
+def missing_installed_skills(root: Path, cfg: Dict) -> List[str]:
+    """Every configured skill the agent that needs it cannot find, as `agent: name`."""
+    out = []
+    for agent in ("claude", "codex"):
+        names = {name for step in DEFAULT_SKILLS[agent] for name in skills_for(cfg, agent, step)}
+        out += [f"{agent}: {name}" for name in sorted(names) if skill_file(agent, name, root) is None]
+    return out
+
+
+def missing_skills(messages: List[Dict], skills: List[str], agent: str = "claude") -> List[str]:
+    """Required skills the worker never loaded: Claude names the skill in a tool call (its Skill tool, or reading
+    the file); Codex must read the skill's SKILL.md."""
     calls = " ".join(json.dumps(b) for m in messages for b in m.get("blocks") or [] if b.get("type") == "tool-call")
-    return [s for s in skills if s.split(":")[-1] not in calls]
+    calls = calls.replace("\\\\", "/")  # Windows paths, as JSON-escaped backslashes
+    need = (lambda s: s) if agent == "claude" else (lambda s: f"{s}/SKILL.md")
+    return [s for s in skills if need(s.split(":")[-1]) not in calls]
 
 
-def skills_note(agent: str, skills: List[str]) -> str:
+def skills_note(agent: str, skills: List[str], root: Optional[Path] = None) -> str:
     if not skills:
         return ""
-    names = ", ".join(f"`{s}`" for s in skills)
-    how = "load each one with your Skill tool" if agent == "claude" else "open each one's SKILL.md"
+    if agent == "claude":
+        how, names = "load each one with your Skill tool", ", ".join(f"`{s}`" for s in skills)
+    else:
+        how = "read each one's SKILL.md in full"
+        names = ", ".join(f"`{s}` ({skill_file(agent, s, root) if root else 'SKILL.md'})" for s in skills)
     return (f"\n\nRequired skills: before you start, {how} and follow it: {names}. ai-eng checks that you loaded them; "
             "if one is not installed, say so in your final reply.")
 
@@ -199,7 +230,7 @@ def run_agent(mail: Mailbox, cwd: Path, argv: List[str], prompt: str, title: str
     """Start `argv` in a new Orca terminal in `cwd`, give it `prompt` as a worker task, return its report body.
     The worker must load every skill in `skills`; one that skips any is reminded once, then the step fails."""
     skills = list(skills)
-    prompt += skills_note(argv[0], skills)
+    prompt += skills_note(argv[0], skills, cwd)
     deadline = time.monotonic() + timeout_s
     command = shell_join(argv)
     for attempt in range(30):  # Orca discovers a just-created worktree (ai-eng's review checkouts) after a short lag
@@ -244,7 +275,7 @@ def run_agent(mail: Mailbox, cwd: Path, argv: List[str], prompt: str, title: str
                     continue
                 report = reply
                 lines.append("report read from the worker's transcript")
-            missing = missing_skills(messages, skills)
+            missing = missing_skills(messages, skills, argv[0])
             if missing:
                 if skills_reminded:
                     raise AgentError(f"the worker did not load required skills: {', '.join(missing)}. If they are not "

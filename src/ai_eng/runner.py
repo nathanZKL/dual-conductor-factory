@@ -21,7 +21,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from . import review
-from .agents import AgentError, Mailbox, claude_command, codex_command, extract_json, preflight, run_agent
+from .agents import (AgentError, Mailbox, claude_command, codex_command, extract_json, missing_installed_skills,
+                     preflight, run_agent)
 from .config import ROLES, skills_for
 from .gitrepo import common_dir, current_branch, dirty_paths, git, origin_url, rev
 from .util import read_text, run, run_tree, write_text
@@ -517,6 +518,10 @@ def _preflight(root: Path, cfg: Dict, full: bool) -> None:
         raise RunStop(problem, 1)
     if not (cfg["project"].get("test_command") or "").strip():
         raise RunStop("set project.test_command in .ai-eng/config.json: ai-eng runs it before every commit", 1)
+    absent = missing_installed_skills(root, cfg)
+    if absent:
+        raise RunStop(f"required skills are not installed: {'; '.join(absent)}. Install them, or change `skills` "
+                      "in .ai-eng/config.json (then run `ai-eng init` to update the Claude subagents)", 1)
     if full:
         steps, problems = plan_worktrees(root, cfg)
         if problems or any(s["status"] != "exists" for s in steps):

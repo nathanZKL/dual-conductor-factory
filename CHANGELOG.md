@@ -4,6 +4,7 @@
 
 - Claude Orca workers may use the Skill tool, so they can load your installed skills. Before this, `--permission-mode dontAsk` denied every skill call. The `implementer` and `tester` subagents get the Skill tool too (template v5: re-run `ai-eng init` to update existing repositories). `researcher` and `security-reviewer` are unchanged.
 - Required skills per step, set in `.ai-eng/config.json` under `skills` (defaults: TDD and verification for builds and tests, systematic debugging and receiving-code-review for fixes). Each worker's task names its skills, and ai-eng checks the Orca transcript that they were loaded. A worker that skipped one is reminded once; if it still hasn't, the step fails. Claude's `implementer` and `tester` subagents preload the `skills.claude.build` skills through their frontmatter `skills:` field, so Claude Code injects them at startup (re-run `ai-eng init` after changing the list).
+- `ai-eng run` refuses to start when a required skill is not installed for the agent that needs it, and `ai-eng doctor` reports it. Codex workers are given each skill's installed `SKILL.md` path and must read that file; naming the skill is no longer enough.
 
 ## 0.3.0
 

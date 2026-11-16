@@ -163,7 +163,10 @@ def orca(args, scenario):
         entry = state.get("transcripts", {}).get(opt(args, "--dispatch")) or {}
         messages = [{"role": "user", "blocks": [{"type": "text", "text": "worker preamble"}]}]
         for skill in entry.get("tools") or []:
-            messages.append({"role": "assistant", "blocks": [{"type": "tool-call", "name": "Skill", "input": {"skill": skill}}]})
+            # Claude loads a skill with its Skill tool; Codex reads the skill's SKILL.md with a shell command.
+            block = {"type": "tool-call", "name": "Skill", "input": {"skill": skill}} if entry.get("text") is None else \
+                {"type": "tool-call", "name": "exec_command", "input": {"cmd": f"cat /x/{skill.split(':')[-1]}/SKILL.md"}}
+            messages.append({"role": "assistant", "blocks": [block]})
         if entry.get("text") is not None:
             messages.append({"role": "assistant", "blocks": [{"type": "text", "text": entry["text"]}]})
         result = {"transcript": {"messages": messages, "limited": False}}

@@ -197,7 +197,8 @@ def test_required_skills_are_named_and_checked(ai, auto):
     assert "load each one with your Skill tool" in claude_build and "`superpowers:test-driven-development`" in claude_build
     assert "Tell `implementer` and `tester` to load and follow these skills too" in claude_build
     codex_test = next(t for n, t in specs.items() if "codex-test-T2" in n)
-    assert "open each one's SKILL.md" in codex_test and "`superpowers:verification-before-completion`" in codex_test
+    assert "read each one's SKILL.md in full" in codex_test and "`superpowers:verification-before-completion`" in codex_test
+    assert "skills/verification-before-completion/SKILL.md)" in codex_test  # the installed file's path
     assert "Required skills" not in next(t for n, t in specs.items() if "review-plan" in n)  # no requirement: no note
 
 
@@ -231,6 +232,28 @@ def test_skills_can_be_changed_in_config(ai, auto):
     cfg_path.write_text(json.dumps(cfg))
     code, out = ai(auto.root, "run", "--status")
     assert code != 0 and "skills.codex.nonsense: unknown step" in out
+
+
+def test_run_refuses_to_start_when_a_required_skill_is_not_installed(ai, auto, installed_skills):
+    skill = installed_skills["codex"] / "plugins/cache/market/superpowers/1.0.0/skills/systematic-debugging/SKILL.md"
+    skill.unlink()
+    code, out = ai(auto.root, "run", "Add a feature")
+    assert code == 1 and "required skills are not installed: codex: superpowers:systematic-debugging" in out
+    assert auto.calls() == []  # no agent was started
+    code, out = ai(auto.root, "doctor")
+    assert "codex: superpowers:systematic-debugging" in out
+
+
+def test_codex_must_read_the_skill_file_not_just_name_it():
+    from ai_eng.agents import missing_skills
+    named = [{"role": "assistant", "blocks": [{"type": "tool-call", "name": "exec_command",
+                                               "input": {"cmd": "rg test-driven-development"}}]}]
+    read = [{"role": "assistant", "blocks": [{"type": "tool-call", "name": "exec_command",
+                                              "input": {"cmd": "sed -n 1,200p /p/skills/test-driven-development/SKILL.md"}}]}]
+    tdd = ["superpowers:test-driven-development"]
+    assert missing_skills(named, tdd, "codex") == tdd
+    assert missing_skills(read, tdd, "codex") == []
+    assert missing_skills(named, tdd, "claude") == []  # Claude's Skill tool call names the skill
 
 
 def test_cross_lane_dependency_builds_on_the_other_task(ai, auto):
