@@ -198,7 +198,7 @@ def test_required_skills_are_named_and_checked(ai, auto):
     assert "Tell `implementer` and `tester` to load and follow these skills too" in claude_build
     codex_test = next(t for n, t in specs.items() if "codex-test-T2" in n)
     assert "read each one's SKILL.md in full" in codex_test and "`superpowers:verification-before-completion`" in codex_test
-    assert "skills/verification-before-completion/SKILL.md)" in codex_test  # the installed file's path
+    assert "skills/verification-before-completion/SKILL.md)" in codex_test.replace("\\", "/")  # the installed file's path
     assert "Required skills" not in next(t for n, t in specs.items() if "review-plan" in n)  # no requirement: no note
 
 
