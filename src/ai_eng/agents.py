@@ -67,15 +67,27 @@ def shell_join(argv: List[str]) -> str:
     return subprocess.list2cmdline(argv) if os.name == "nt" else shlex.join(argv)
 
 
+# Global add-ons that stall unattended workers: the brainstorming skill asks clarifying questions first, and the
+# GateGuard hook (ECC) denies each first edit until "facts" are stated. Both stay on in the owner's own sessions.
+WORKER_ENV = {"ECC_GATEGUARD": "off"}
+DISABLED_SKILLS = ("superpowers:brainstorming",)
+
+
 def claude_command(model: str, tools: List[str]) -> List[str]:
     # dontAsk: anything outside the allowlist is denied instead of stopping to ask, so workers never stall.
     # Workers report through the orca CLI, so that one command family must be allowed.
     report = ["Bash(orca orchestration send:*)", "Bash(orca orchestration ask:*)"]
-    return ["claude", "--model", model, "--permission-mode", "dontAsk", "--allowedTools", *tools, *report]
+    return ["claude", "--model", model, "--permission-mode", "dontAsk",
+            "--settings", json.dumps({"env": WORKER_ENV}, separators=(",", ":")),
+            "--disallowedTools", *(f"Skill({s})" for s in DISABLED_SKILLS),
+            "--allowedTools", *tools, *report]  # variadic flags: --allowedTools stays last
 
 
 def codex_command(model: str, effort: str, sandbox: str) -> List[str]:
-    return ["codex", "-m", model, "-c", f"model_reasoning_effort={effort}", "-s", sandbox, "-a", "never"]
+    names = [n for s in DISABLED_SKILLS for n in (s, s.split(":")[-1])]  # plugin-qualified and bare names
+    skills = "[" + ",".join(f'{{name="{n}",enabled=false}}' for n in names) + "]"
+    return ["codex", "-m", model, "-c", f"model_reasoning_effort={effort}", "-c", f"skills.config={skills}",
+            "-s", sandbox, "-a", "never"]
 
 
 def preflight(root: Path) -> Optional[str]:

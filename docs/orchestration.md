@@ -27,6 +27,12 @@ For each agent step, ai-eng:
 
 Claude's tasks and Codex's tasks run in parallel, one lane per conductor. A task that depends on the other conductor's task waits for it and builds on top of its branch. Reviews use separate review worktrees, so a reviewer never disturbs its own conductor's work. State and per-step logs (with each worker's task and report) live in `.git/ai-eng/runs/`.
 
+Workers start without two global add-ons that stall unattended agents, while your own sessions keep them:
+- **brainstorming:** the `superpowers:brainstorming` skill asks clarifying questions before any work. Claude gets `--disallowedTools Skill(superpowers:brainstorming)`; Codex gets `-c skills.config=[{name=...,enabled=false}]`.
+- **GateGuard:** the ECC GateGuard hook denies each first edit. Claude gets `--settings {"env":{"ECC_GATEGUARD":"off"}}`. Codex runs no GateGuard hook.
+
+The list is `DISABLED_SKILLS` and `WORKER_ENV` in `src/ai_eng/agents.py`.
+
 Spending is not capped: Claude's `--max-budget-usd` only works in headless print mode, so `automation.budget_usd` is not enforced. Runs are bounded by `agent_timeout_minutes`, `max_fix_attempts` and the NO-GO round limit.
 
 ## Manual (interactive sessions)

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- Orca workers start without the `superpowers:brainstorming` skill, which asks clarifying questions first, and without the ECC GateGuard hook, which denies first edits. Both stalled unattended workers. Your own Claude and Codex sessions keep them. Verified for real: brainstorming is blocked ("Skill execution blocked by permission rules"), and a first write succeeds where GateGuard otherwise denies it.
+
 ## 0.3.0
 
 - `ai-eng run` now starts every agent as an Orca worker, with Orca as the home base. Run it from a terminal inside Orca. It refuses to start elsewhere, or when the repository is not in Orca. Each step gets its own Orca terminal with the exact model and permissions ai-eng chose:
