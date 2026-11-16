@@ -97,7 +97,8 @@ def act(which, args, prompt, cwd, scenario):
 
 
 def orca(args, scenario):
-    state = load(STATE, {"terms": {}, "mail": [], "waits": 0, "next": 0})
+    with locked():  # another lane may be rewriting the file: never read it half-written
+        state = load(STATE, {"terms": {}, "mail": [], "waits": 0, "next": 0})
     result = {}
     if args[:2] == ["repo", "list"]:
         result = {"repos": [{"path": os.environ["FAKE_REPO"]}]}

@@ -37,6 +37,7 @@ def auto(tmp_path, repo, ai, monkeypatch):
     cfg_path = repo / ".ai-eng/config.json"
     cfg = json.loads(cfg_path.read_text())
     cfg["project"]["test_command"] = f'"{sys.executable}" check.py'
+    cfg["automation"]["agent_timeout_minutes"] = 2  # a lost report fails the test fast instead of hanging CI
     cfg_path.write_text(json.dumps(cfg, indent=2))
     assert ai(repo, "init", "--yes")[0] == 0
     git(repo, "add", "-A")
