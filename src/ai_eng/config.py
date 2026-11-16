@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 CONFIG_PATH = ".ai-eng/config.json"
 MANIFEST_PATH = ".ai-eng/manifest.json"
@@ -34,6 +34,12 @@ DEFAULT_SKILLS = {
 
 class ConfigError(ValueError):
     pass
+
+
+def skills_for(cfg: Dict, agent: str, step: str) -> List[str]:
+    """Skills this kind of step must load: .ai-eng/config.json `skills`, else the defaults."""
+    configured = (cfg.get("skills") or {}).get(agent) or {}
+    return list(configured.get(step, DEFAULT_SKILLS[agent][step]))
 
 
 def detect_stack(root: Path) -> str:

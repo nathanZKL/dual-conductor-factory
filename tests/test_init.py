@@ -64,6 +64,24 @@ def test_existing_instructions_are_kept_and_backed_up(ai, repo):
     assert len(backups) == 1 and backups[0].read_text() == original
 
 
+def test_build_subagents_preload_the_build_skills(ai, repo):
+    code, out = ai(repo, "init", "--yes")
+    assert code == 0, out
+    for name in ("implementer", "tester"):
+        head = (repo / f".claude/agents/{name}.md").read_text().split("---")[1]
+        assert ("skills:\n  - superpowers:test-driven-development\n"
+                "  - superpowers:verification-before-completion\n") in head
+    assert "skills:" not in (repo / ".claude/agents/researcher.md").read_text()
+    # An empty build list in the config drops the field.
+    cfg_path = repo / ".ai-eng/config.json"
+    cfg = json.loads(cfg_path.read_text())
+    cfg["skills"]["claude"]["build"] = []
+    cfg_path.write_text(json.dumps(cfg))
+    code, out = ai(repo, "init", "--yes")
+    assert code == 0, out
+    assert "skills:" not in (repo / ".claude/agents/implementer.md").read_text()
+
+
 def test_conflicting_file_stops_and_writes_nothing(ai, repo):
     agent = repo / ".claude/agents/implementer.md"
     agent.parent.mkdir(parents=True)

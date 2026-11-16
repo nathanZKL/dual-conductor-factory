@@ -48,7 +48,7 @@ How each step is enforced:
 
 If a skill is not installed on your machine, remove it from the list or install it.
 
-Not enforced: skill use *inside* Claude's subagents. The build task tells `implementer` and `tester` to load the skills, but subagent tool calls are not checked.
+Claude's `implementer` and `tester` subagents get the `skills.claude.build` list in their frontmatter (`skills:`), so Claude Code preloads the full skill text when each subagent starts; the subagent does not choose. Change the list, then re-run `ai-eng init` to rewrite the agent files. Claude Code skips a listed skill that is not installed (it logs a warning to its debug log only), so install every listed skill first.
 
 Spending is not capped: Claude's `--max-budget-usd` only works in headless print mode, so `automation.budget_usd` is not enforced. Runs are bounded by `agent_timeout_minutes`, `max_fix_attempts` and the NO-GO round limit.
 

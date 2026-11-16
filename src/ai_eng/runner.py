@@ -22,7 +22,7 @@ from typing import Dict, List, Optional
 
 from . import review
 from .agents import AgentError, Mailbox, claude_command, codex_command, extract_json, preflight, run_agent
-from .config import DEFAULT_SKILLS, ROLES
+from .config import ROLES, skills_for
 from .gitrepo import common_dir, current_branch, dirty_paths, git, origin_url, rev
 from .util import read_text, run, run_tree, write_text
 from .worktrees import plan_worktrees
@@ -166,9 +166,7 @@ class Run:
         return [f"Bash({p}:*)" for p in parts] + [f"Bash({c}:*)" for c in ("git status", "git diff", "git log", "git show")]
 
     def skills(self, agent: str, kind: str) -> List[str]:
-        """Skills this kind of step must load: .ai-eng/config.json `skills`, else the defaults."""
-        configured = (self.cfg.get("skills") or {}).get(agent) or {}
-        return list(configured.get(kind, DEFAULT_SKILLS[agent][kind]))
+        return skills_for(self.cfg, agent, kind)
 
     def claude(self, cwd: Path, prompt: str, tools: List[str], step: str, kind: str, model: Optional[str] = None) -> str:
         return self._agent(claude_command(model or self.cfg["conductors"]["claude"]["model"], tools), cwd, prompt, step,
