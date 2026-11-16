@@ -27,6 +27,29 @@ For each agent step, ai-eng:
 
 Claude's tasks and Codex's tasks run in parallel, one lane per conductor. A task that depends on the other conductor's task waits for it and builds on top of its branch. Reviews use separate review worktrees, so a reviewer never disturbs its own conductor's work. State and per-step logs (with each worker's task and report) live in `.git/ai-eng/runs/`.
 
+### Required skills
+
+Each kind of step has a list of skills its worker must load, set in `.ai-eng/config.json` under `skills`. Repositories without that key use these defaults:
+
+| Agent | Step | Default skills |
+|---|---|---|
+| Claude | `plan`, `review` | none |
+| Claude | `build` | `superpowers:test-driven-development`, `superpowers:verification-before-completion` (also passed on to `implementer` and `tester`) |
+| Claude | `fix` (after failing tests or a NO-GO) | `superpowers:systematic-debugging`, `superpowers:receiving-code-review` |
+| Codex | `plan_review`, `research`, `security`, `review` | none |
+| Codex | `implement` | `superpowers:test-driven-development` |
+| Codex | `test` | `superpowers:test-driven-development`, `superpowers:verification-before-completion` |
+| Codex | `fix` | `superpowers:systematic-debugging`, `superpowers:receiving-code-review` |
+
+How each step is enforced:
+1. The worker's task names the skills.
+2. When it finishes, ai-eng checks its Orca transcript for a tool call that loads each one: Claude's Skill tool, or Codex opening the skill's `SKILL.md`.
+3. A worker that skipped a skill is reminded once. If it still hasn't loaded it, the step fails and the run stops for you.
+
+If a skill is not installed on your machine, remove it from the list or install it.
+
+Not enforced: skill use *inside* Claude's subagents. The build task tells `implementer` and `tester` to load the skills, but subagent tool calls are not checked.
+
 Spending is not capped: Claude's `--max-budget-usd` only works in headless print mode, so `automation.budget_usd` is not enforced. Runs are bounded by `agent_timeout_minutes`, `max_fix_attempts` and the NO-GO round limit.
 
 ## Manual (interactive sessions)

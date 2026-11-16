@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Claude Orca workers may use the Skill tool, so they can load your installed skills. Before this, `--permission-mode dontAsk` denied every skill call. The `implementer` and `tester` subagents get the Skill tool too (template v5: re-run `ai-eng init` to update existing repositories). `researcher` and `security-reviewer` are unchanged.
+- Required skills per step, set in `.ai-eng/config.json` under `skills` (defaults: TDD and verification for builds and tests, systematic debugging and receiving-code-review for fixes). Each worker's task names its skills, and ai-eng checks the Orca transcript that they were loaded. A worker that skipped one is reminded once; if it still hasn't, the step fails. Skill use inside Claude's subagents is requested but not checked.
 
 ## 0.3.0
 

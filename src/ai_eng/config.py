@@ -20,6 +20,18 @@ TEST_COMMANDS = {
 }
 
 
+# Skills each `ai-eng run` step must load; ai-eng checks the worker's transcript. Empty list: no requirement.
+# Process skills that ask questions or take over git (brainstorming, writing-plans, finishing-a-development-branch,
+# using-git-worktrees) are deliberately absent: they fight the automated loop.
+TDD, VERIFY = "superpowers:test-driven-development", "superpowers:verification-before-completion"
+DEBUG, REVIEWED = "superpowers:systematic-debugging", "superpowers:receiving-code-review"
+DEFAULT_SKILLS = {
+    "claude": {"plan": [], "build": [TDD, VERIFY], "fix": [DEBUG, REVIEWED], "review": []},
+    "codex": {"plan_review": [], "research": [], "implement": [TDD], "test": [TDD, VERIFY], "fix": [DEBUG, REVIEWED],
+              "security": [], "review": []},
+}
+
+
 class ConfigError(ValueError):
     pass
 
@@ -71,6 +83,7 @@ def default_config(name: str, description: str, stack: str, base_branch: str) ->
         },
         "limits": {"max_subagents_per_conductor": MAX_SUBAGENTS_CAP, "max_review_rounds": 3},
         "automation": {"budget_usd": 20, "agent_timeout_minutes": 30, "test_timeout_minutes": 15, "max_fix_attempts": 2},
+        "skills": {agent: {step: list(names) for step, names in steps.items()} for agent, steps in DEFAULT_SKILLS.items()},
         "ci": {"enabled": stack != "none"},
     }
 
@@ -108,6 +121,13 @@ def validate(cfg: Dict) -> Dict:
     rounds = _need(cfg, "limits", "max_review_rounds")
     if not isinstance(rounds, int) or rounds < 1:
         raise ConfigError("limits.max_review_rounds must be a positive integer")
+    for agent, steps in (cfg.get("skills") or {}).items():
+        for step, names in (steps or {}).items():
+            if step not in DEFAULT_SKILLS.get(agent, {}):
+                raise ConfigError(f"skills.{agent}.{step}: unknown step (expected one of "
+                                  f"{', '.join(DEFAULT_SKILLS.get(agent, {})) or 'none: agent must be claude or codex'})")
+            if not isinstance(names, list) or not all(isinstance(n, str) and n.strip() for n in names):
+                raise ConfigError(f"skills.{agent}.{step} must be a list of skill names")
     return cfg
 
 

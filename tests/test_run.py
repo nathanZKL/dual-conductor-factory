@@ -188,6 +188,51 @@ def test_new_review_worktree_waits_for_orca_discovery(ai, auto):
     assert code == 0, out
 
 
+def test_required_skills_are_named_and_checked(ai, auto):
+    ai(auto.root, "run", "Add a feature")
+    code, out = ai(auto.root, "run", "--continue", "add-a-feature")
+    assert code == 0, out
+    specs = {p.name: p.read_text() for p in (auto.root / ".git/ai-eng/runs/add-a-feature").glob("*.spec.md")}
+    claude_build = next(t for n, t in specs.items() if "claude-build-T1" in n)
+    assert "load each one with your Skill tool" in claude_build and "`superpowers:test-driven-development`" in claude_build
+    assert "Tell `implementer` and `tester` to load and follow these skills too" in claude_build
+    codex_test = next(t for n, t in specs.items() if "codex-test-T2" in n)
+    assert "open each one's SKILL.md" in codex_test and "`superpowers:verification-before-completion`" in codex_test
+    assert "Required skills" not in next(t for n, t in specs.items() if "review-plan" in n)  # no requirement: no note
+
+
+def test_worker_that_skips_skills_is_reminded_then_passes(ai, auto):
+    auto.scenario(skip_skills="AI-ENG-ROLE: implement")
+    ai(auto.root, "run", "Add a feature")
+    code, out = ai(auto.root, "run", "--continue", "add-a-feature")
+    assert code == 0, out
+    log = next((auto.root / ".git/ai-eng/runs/add-a-feature").glob("*codex-implement-T2.log")).read_text()
+    assert "reminded the worker to load skills: superpowers:test-driven-development" in log
+
+
+def test_worker_that_never_loads_skills_stops_the_lane(ai, auto):
+    auto.scenario(skip_skills="AI-ENG-ROLE: implement", skills_never=True)
+    ai(auto.root, "run", "Add a feature")
+    code, out = ai(auto.root, "run", "--continue", "add-a-feature")
+    assert code == 2 and "did not load required skills: superpowers:test-driven-development" in out
+    assert auto.state()["tasks"]["T1"]["status"] == "published"  # the other lane is unaffected
+
+
+def test_skills_can_be_changed_in_config(ai, auto):
+    cfg_path = auto.root / ".ai-eng/config.json"
+    cfg = json.loads(cfg_path.read_text())
+    cfg["skills"]["codex"]["implement"] = []
+    cfg_path.write_text(json.dumps(cfg))
+    auto.scenario(skip_skills="AI-ENG-ROLE: implement", skills_never=True)
+    ai(auto.root, "run", "Add a feature")
+    code, out = ai(auto.root, "run", "--continue", "add-a-feature")
+    assert code == 0, out
+    cfg["skills"]["codex"]["nonsense"] = []
+    cfg_path.write_text(json.dumps(cfg))
+    code, out = ai(auto.root, "run", "--status")
+    assert code != 0 and "skills.codex.nonsense: unknown step" in out
+
+
 def test_cross_lane_dependency_builds_on_the_other_task(ai, auto):
     tasks = [{"id": "T1", "title": "base", "owner": "claude", "depends_on": []},
              {"id": "T2", "title": "on top", "owner": "codex", "depends_on": ["T1"]}]

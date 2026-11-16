@@ -131,17 +131,26 @@ def orca(args, scenario):
         prompt = Path(opt(args, "--spec-file")).read_text()
         did = f"ctx_{opt(args, '--terminal')}"
         outcome = act(argv[0], argv[1:], prompt, Path(term["cwd"]), scenario)
+        # Skills named in the task's "Required skills:" line; the worker loads them (tool calls in its transcript)
+        # unless the scenario says to skip them once.
+        required = re.findall(r"`([^`]+)`", (re.search(r"Required skills:[^\n]*", prompt) or [""])[0])
         if outcome is not None:
             with locked():
                 state = load(STATE, state)
                 msg = {"id": f"msg_{did}", "type": outcome[0], "body": outcome[1], "payload": {"dispatchId": did}}
+                skip = required and scenario.get("skip_skills") and scenario["skip_skills"] in prompt
+                skip = skip and not state.get("skipped")  # only the first matching worker skips
                 if outcome[0] == "escalation":
                     msg["payload"]["stopReason"] = "lost"  # as real Orca reports a worker that died
                 elif argv[0] == "codex":
                     # Real Codex cannot reach the orca CLI from its sandbox: it ends its turn, the reply is in its transcript.
-                    state.setdefault("transcripts", {})[did] = outcome[1]
                     msg = {"id": f"esc_{did}", "type": "escalation", "body": "ended its turn without worker_done",
                            "payload": {"dispatchId": did}}
+                state.setdefault("transcripts", {})[did] = {"text": outcome[1] if argv[0] == "codex" else None,
+                                                            "tools": [] if skip else required}
+                if skip:
+                    state["skipped"] = True
+                    state.setdefault("skill_pending", {})[did] = {"msg": msg, "skills": required}
                 if scenario.get("silent") and scenario["silent"] in prompt and not state.get("silenced"):
                     state["silenced"] = True  # ends its turn without reporting; reports when reminded
                     state.setdefault("held", {})[did] = msg
@@ -151,17 +160,25 @@ def orca(args, scenario):
                 STATE.write_text(json.dumps(state))
         result = {"dispatchId": did, "state": "ready"}
     elif args[:2] == ["orchestration", "worker-read"]:
-        text = state.get("transcripts", {}).get(opt(args, "--dispatch"))
+        entry = state.get("transcripts", {}).get(opt(args, "--dispatch")) or {}
         messages = [{"role": "user", "blocks": [{"type": "text", "text": "worker preamble"}]}]
-        if text is not None:
-            messages.append({"role": "assistant", "blocks": [{"type": "text", "text": text}]})
+        for skill in entry.get("tools") or []:
+            messages.append({"role": "assistant", "blocks": [{"type": "tool-call", "name": "Skill", "input": {"skill": skill}}]})
+        if entry.get("text") is not None:
+            messages.append({"role": "assistant", "blocks": [{"type": "text", "text": entry["text"]}]})
         result = {"transcript": {"messages": messages, "limited": False}}
     elif args[:2] == ["orchestration", "send"]:
         with locked():
             state = load(STATE, state)
-            held = state.get("held", {}).pop(opt(args, "--to")[len("dispatch:"):], None)
+            did = opt(args, "--to")[len("dispatch:"):]
+            held = state.get("held", {}).pop(did, None)
             if held:
                 state["mail"].append(held)
+            pending = state.get("skill_pending", {}).pop(did, None)
+            if pending:  # reminded about skills: it loads them and finishes again
+                if not scenario.get("skills_never"):
+                    state["transcripts"][did]["tools"] = pending["skills"]
+                state["mail"].append(dict(pending["msg"], id=pending["msg"]["id"] + "-again"))
             STATE.write_text(json.dumps(state))
     elif args[:2] == ["orchestration", "check"]:
         with locked():

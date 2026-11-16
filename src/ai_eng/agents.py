@@ -155,25 +155,51 @@ def _wait_ready(term: str, title: str, deadline: float, say: Callable[[str], Non
             time.sleep(3)
 
 
-def final_reply(dispatch_id: str) -> str:
-    """The worker's last assistant text in its Orca transcript, or ''."""
-    last, cursor = "", None
+def transcript(dispatch_id: str) -> List[Dict]:
+    """Every message in the worker's Orca transcript."""
+    messages, cursor = [], None
     for _ in range(100):  # pages of 50 messages; a step never gets near this
         page = orca("orchestration", "worker-read", "--dispatch", dispatch_id, "--source", "transcript", "--limit", "50",
                     *(["--cursor", cursor] if cursor else []), timeout=60).get("transcript") or {}
-        for msg in page.get("messages") or []:
-            text = "".join(b.get("text", "") for b in msg.get("blocks") or [] if b.get("type") == "text").strip()
-            if msg.get("role") == "assistant" and text:
-                last = text
+        messages += page.get("messages") or []
         cursor = page.get("nextCursor")
         if not page.get("limited") or not cursor or not page.get("messages"):
-            return last
+            break
+    return messages
+
+
+def final_reply(messages: List[Dict]) -> str:
+    """The last assistant text in a transcript, or ''."""
+    last = ""
+    for msg in messages:
+        text = "".join(b.get("text", "") for b in msg.get("blocks") or [] if b.get("type") == "text").strip()
+        if msg.get("role") == "assistant" and text:
+            last = text
     return last
 
 
+def missing_skills(messages: List[Dict], skills: List[str]) -> List[str]:
+    """Required skills the worker never loaded. Claude loads one with its Skill tool; Codex opens its SKILL.md.
+    Either way the skill's own name (after any `plugin:` prefix) appears in a tool call."""
+    calls = " ".join(json.dumps(b) for m in messages for b in m.get("blocks") or [] if b.get("type") == "tool-call")
+    return [s for s in skills if s.split(":")[-1] not in calls]
+
+
+def skills_note(agent: str, skills: List[str]) -> str:
+    if not skills:
+        return ""
+    names = ", ".join(f"`{s}`" for s in skills)
+    how = "load each one with your Skill tool" if agent == "claude" else "open each one's SKILL.md"
+    return (f"\n\nRequired skills: before you start, {how} and follow it: {names}. ai-eng checks that you loaded them; "
+            "if one is not installed, say so in your final reply.")
+
+
 def run_agent(mail: Mailbox, cwd: Path, argv: List[str], prompt: str, title: str, timeout_s: int, log: Path,
-              say: Callable[[str], None]) -> str:
-    """Start `argv` in a new Orca terminal in `cwd`, give it `prompt` as a worker task, return its report body."""
+              say: Callable[[str], None], skills: List[str] = ()) -> str:
+    """Start `argv` in a new Orca terminal in `cwd`, give it `prompt` as a worker task, return its report body.
+    The worker must load every skill in `skills`; one that skips any is reminded once, then the step fails."""
+    skills = list(skills)
+    prompt += skills_note(argv[0], skills)
     deadline = time.monotonic() + timeout_s
     command = shell_join(argv)
     for attempt in range(30):  # Orca discovers a just-created worktree (ai-eng's review checkouts) after a short lag
@@ -193,32 +219,45 @@ def run_agent(mail: Mailbox, cwd: Path, argv: List[str], prompt: str, title: str
         did = orca("orchestration", "worker-start", "--terminal", term, "--worktree", f"path:{cwd}", "--spec-file", str(spec),
                    "--task-title", title, timeout=180)["dispatchId"]
         lines.append(f"dispatch {did}")
-        nudged = False
+        nudged = skills_reminded = False
         while True:
             msg = mail.wait(did, deadline)
             if msg is None:
                 _quiet("orchestration", "worker-stop", "--dispatch", did)
                 raise AgentError(f"timed out after {timeout_s}s (its Orca worker was stopped)")
             report = str(msg.get("body") or "")
-            if msg.get("type") == "worker_done":
-                return report
-            stop = (msg.get("payload") or {}).get("stopReason")
-            if stop in ("lost", "exited"):
+            done = msg.get("type") == "worker_done"
+            if not done and (msg.get("payload") or {}).get("stopReason") in ("lost", "exited"):
                 raise AgentError(f"the Orca worker stopped without reporting: {report[:300]}")
-            # It ended its turn without worker_done but is still there: its final reply is the report.
-            reply = final_reply(did)
-            if reply:
+            messages = transcript(did) if skills or not done else []
+            if not done:
+                # It ended its turn without worker_done but is still there: its final reply is the report.
+                reply = final_reply(messages)
+                if not reply:
+                    if nudged:
+                        raise AgentError(f"the Orca worker ended its turn twice without a reply: {report[:300]}")
+                    nudged = True  # remind it once
+                    lines.append("reminded the worker to send worker_done")
+                    orca("orchestration", "send", "--to", f"dispatch:{did}", "--subject", "Report now",
+                         "--body", "You ended your turn without worker_done. Finish the task if needed, then report "
+                                   "with worker_done; the report body must be your final reply as the task describes.")
+                    continue
+                report = reply
                 lines.append("report read from the worker's transcript")
+            missing = missing_skills(messages, skills)
+            if missing:
+                if skills_reminded:
+                    raise AgentError(f"the worker did not load required skills: {', '.join(missing)}. If they are not "
+                                     "installed, change `skills` in .ai-eng/config.json")
+                skills_reminded = True
+                lines.append(f"reminded the worker to load skills: {', '.join(missing)}")
+                orca("orchestration", "send", "--to", f"dispatch:{did}", "--subject", "Load the required skills",
+                     "--body", f"You did not load these required skills: {', '.join(missing)}. Load each one now, "
+                               "check your work against it, fix anything it calls for, then finish the same way as before.")
+                continue
+            if not done:
                 _quiet("orchestration", "worker-stop", "--dispatch", did)
-                return reply
-            if nudged:
-                raise AgentError(f"the Orca worker ended its turn twice without a reply: {report[:300]}")
-            # It ended its turn without worker_done but is still there: remind it once.
-            nudged = True
-            lines.append("reminded the worker to send worker_done")
-            orca("orchestration", "send", "--to", f"dispatch:{did}", "--subject", "Report now",
-                 "--body", "You ended your turn without worker_done. Finish the task if needed, then report with "
-                           "worker_done; the report body must be your final reply as the task describes.")
+            return report
     finally:
         write_text(log, redact("\n".join(lines + ["", "--- task", prompt, "", "--- report", report])) + "\n")
         _quiet("terminal", "close", "--terminal", term)
