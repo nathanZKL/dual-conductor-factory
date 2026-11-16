@@ -100,6 +100,7 @@ def test_full_loop_cross_reviews_and_opens_draft_prs(ai, auto):
     # Claude runs with a tool allowlist and never stops to ask; the Claude reviewer cannot edit.
     claude_review = next(c for c in calls if c["agent"] == "claude" and c["role"] == "review-commit")
     assert "dontAsk" in claude_review["args"] and "Edit" not in claude_review["args"]
+    assert all("Skill" in c["args"] for c in calls if c["agent"] == "claude")  # workers may load installed skills
     # Builders work in their own worktree; Codex used its role workers incl. security for T2.
     assert any(c["agent"] == "claude" and c["role"] == "build" and c["cwd"] == "claude" for c in calls)
     assert [c["role"] for c in calls if c["agent"] == "codex" and c["task"] == "T2"] == ["implement", "test", "security"]

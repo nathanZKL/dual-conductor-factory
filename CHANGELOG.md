@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Claude Orca workers may use the Skill tool, so they can load your installed skills. Before this, `--permission-mode dontAsk` denied every skill call. Claude's subagents (`.claude/agents/*.md`) still list fixed tools without Skill.
+
 ## 0.3.0
 
 - `ai-eng run` now starts every agent as an Orca worker, with Orca as the home base. Run it from a terminal inside Orca. It refuses to start elsewhere, or when the repository is not in Orca. Each step gets its own Orca terminal with the exact model and permissions ai-eng chose:

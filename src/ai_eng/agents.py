@@ -71,7 +71,8 @@ def claude_command(model: str, tools: List[str]) -> List[str]:
     # dontAsk: anything outside the allowlist is denied instead of stopping to ask, so workers never stall.
     # Workers report through the orca CLI, so that one command family must be allowed.
     report = ["Bash(orca orchestration send:*)", "Bash(orca orchestration ask:*)"]
-    return ["claude", "--model", model, "--permission-mode", "dontAsk", "--allowedTools", *tools, *report]
+    # Skill: let workers load the owner's installed skills (dontAsk would otherwise deny every skill call).
+    return ["claude", "--model", model, "--permission-mode", "dontAsk", "--allowedTools", *tools, "Skill", *report]
 
 
 def codex_command(model: str, effort: str, sandbox: str) -> List[str]:
