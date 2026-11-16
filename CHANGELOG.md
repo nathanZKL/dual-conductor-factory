@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Claude Orca workers may use the Skill tool, so they can load your installed skills. Before this, `--permission-mode dontAsk` denied every skill call. Claude's subagents (`.claude/agents/*.md`) still list fixed tools without Skill.
+- Claude Orca workers may use the Skill tool, so they can load your installed skills. Before this, `--permission-mode dontAsk` denied every skill call. The `implementer` and `tester` subagents get the Skill tool too (template v5: re-run `ai-eng init` to update existing repositories). `researcher` and `security-reviewer` are unchanged.
 
 ## 0.3.0
 

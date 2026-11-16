@@ -3,4 +3,4 @@
 __version__ = "0.3.0"
 
 # Bump when generated file content changes, so `upgrade --plan` and `doctor` can report drift.
-TEMPLATE_VERSION = 4
+TEMPLATE_VERSION = 5
