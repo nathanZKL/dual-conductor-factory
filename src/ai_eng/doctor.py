@@ -28,7 +28,7 @@ INSTALL_HINTS = {
     "git": "Install Git: https://git-scm.com/downloads",
     "claude": "Install Claude Code: https://docs.anthropic.com/en/docs/claude-code",
     "codex": "Install the Codex CLI: https://github.com/openai/codex",
-    "orca": "Optional. Without Orca, dispatch tasks and workers by hand (see docs/ENGINEERING.md).",
+    "orca": "Needed for `ai-eng run`, which starts every agent as an Orca worker. Without it, work by hand (see docs/ENGINEERING.md).",
     "gh": "Install GitHub CLI and run `gh auth login`: https://cli.github.com",
 }
 
@@ -80,7 +80,7 @@ def run_doctor(root: Path, online: bool = False) -> List[Dict]:
             add("orca.runtime", "verified", "Orca runtime is reachable")
         else:
             add("orca.runtime", "blocked", "Orca is installed but its runtime is not reachable", "Start the Orca app: orca open")
-        add("orca.dispatch", "untested", "Orca worker dispatch is not checked on this machine; it must be started from inside an Orca terminal (see docs/orchestration.md)")
+        add("orca.dispatch", "untested", "Orca worker dispatch is not checked on this machine; run `ai-eng run` from a terminal inside Orca (see docs/orchestration.md)")
 
     # Config and managed files
     try:

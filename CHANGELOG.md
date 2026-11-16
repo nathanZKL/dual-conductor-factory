@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0
+
+- `ai-eng run` now starts every agent as an Orca worker, with Orca as the home base. Run it from a terminal inside Orca. It refuses to start elsewhere, or when the repository is not in Orca. Each step gets its own Orca terminal with the exact model and permissions ai-eng chose:
+  - Claude: `dontAsk` plus a tool allowlist.
+  - Codex: a `workspace-write` sandbox for builders and `read-only` for reviewers.
+- Results come back without the owner relaying anything. Claude reports with `worker_done`. Codex, whose sandbox blocks the `orca` CLI, ends its turn, and ai-eng reads its final reply from the Orca transcript. Silent workers are reminded once.
+- Claude's tasks and Codex's tasks build in parallel, one lane per conductor. Cross-conductor dependencies wait and build on the other task's branch.
+- Reviews run in separate review worktrees (`../<repo>.worktrees/review-<conductor>`). A verdict from a reviewer that changed files is rejected.
+- Startup prompts (Claude folder trust, Codex hook review) are never answered by ai-eng. It says which Orca terminal is waiting and carries on after the owner answers.
+- Spending is no longer capped: `automation.budget_usd` is not enforced, because Claude's budget flag only works in headless print mode.
+- Generated docs (template v4) describe the Orca mode. Re-run `ai-eng init` to update existing repositories.
+- Tested end to end in Orca 1.4.259 against a local repository: plan review, parallel builds, cross reviews. Push and draft PRs were not exercised in Orca mode.
+
 ## 0.2.1
 
 - Orca worker dispatch tested end to end on Orca 1.4.259. Docs and the generated `AGENTS.md` (template v3) now say `orca orchestration worker-start` must run from inside an Orca terminal; elsewhere it fails with `no_active_sender_terminal`. Re-run `ai-eng init` to update existing repositories.

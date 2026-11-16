@@ -1,4 +1,4 @@
-"""End-to-end tests of `ai-eng run` with fake claude/codex/gh binaries on PATH."""
+"""End-to-end tests of `ai-eng run` with fake orca/claude/codex/gh binaries on PATH."""
 import json
 import os
 import stat
@@ -15,10 +15,10 @@ FAKE = Path(__file__).with_name("fake_agent.py")
 
 @pytest.fixture
 def auto(tmp_path, repo, ai, monkeypatch):
-    """A repo with ai-eng initialised, worktrees created, a bare origin, and fake agents on PATH."""
+    """A repo with ai-eng initialised, worktrees created, a bare origin, and fake Orca and agents on PATH."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for name in ("claude", "codex", "gh"):
+    for name in ("orca", "claude", "codex", "gh"):
         if os.name == "nt":
             (bin_dir / f"{name}.cmd").write_text(f'@"{sys.executable}" "{FAKE}" {name} %*\r\n')
         else:
@@ -29,6 +29,8 @@ def auto(tmp_path, repo, ai, monkeypatch):
     scenario, calls = tmp_path / "scenario.json", tmp_path / "calls.json"
     monkeypatch.setenv("FAKE_SCENARIO", str(scenario))
     monkeypatch.setenv("FAKE_CALLS", str(calls))
+    monkeypatch.setenv("FAKE_REPO", str(repo.resolve()))
+    monkeypatch.setenv("ORCA_TERMINAL_HANDLE", "term_coordinator")
 
     (repo / "check.py").write_text("import os, sys\nsys.exit(1 if os.path.exists('BROKEN') else 0)\n")
     assert ai(repo, "init", "--yes")[0] == 0
@@ -91,9 +93,12 @@ def test_full_loop_cross_reviews_and_opens_draft_prs(ai, auto):
     assert {t: s["status"] for t, s in state["tasks"].items()} == {"T1": "published", "T2": "published"}
     assert {"claude/add-a-feature-t1", "codex/add-a-feature-t2"} <= remote_branches(auto.remote)
     calls = auto.calls()
-    # Each commit is reviewed by the other conductor, in the other conductor's worktree.
+    # Each commit is reviewed by the other conductor, in that conductor's separate review worktree.
     reviews = {c["task"]: (c["agent"], c["cwd"]) for c in calls if c["role"] == "review-commit"}
-    assert reviews == {"T1": ("codex", "codex"), "T2": ("claude", "claude")}
+    assert reviews == {"T1": ("codex", "review-codex"), "T2": ("claude", "review-claude")}
+    # Claude runs with a tool allowlist and never stops to ask; the Claude reviewer cannot edit.
+    claude_review = next(c for c in calls if c["agent"] == "claude" and c["role"] == "review-commit")
+    assert "dontAsk" in claude_review["args"] and "Edit" not in claude_review["args"]
     # Builders work in their own worktree; Codex used its role workers incl. security for T2.
     assert any(c["agent"] == "claude" and c["role"] == "build" and c["cwd"] == "claude" for c in calls)
     assert [c["role"] for c in calls if c["agent"] == "codex" and c["task"] == "T2"] == ["implement", "test", "security"]
@@ -101,7 +106,7 @@ def test_full_loop_cross_reviews_and_opens_draft_prs(ai, auto):
     implement = next(c for c in calls if c["role"] == "implement")
     assert "gpt-6.1-terra" in implement["args"] and "workspace-write" in implement["args"]
     assert "read-only" in next(c for c in calls if c["agent"] == "codex" and c["role"] == "review-commit")["args"]
-    # Reviewer worktrees were put back; main checkout only gained the plan.
+    # Conductor worktrees stay on their task branches; main checkout only gained the plan.
     assert git(auto.root.parent / "proj.worktrees/codex", "branch", "--show-current") == "codex/add-a-feature-t2"
     assert git(auto.root, "status", "--porcelain").strip() == "?? docs/ai-eng/plans/"
     records = [json.loads(p.read_text()) for p in (auto.root / ".git/ai-eng/reviews").glob("commit-*.json")]
@@ -149,12 +154,56 @@ def test_failing_tests_get_a_fix_attempt(ai, auto):
     assert not (auto.root.parent / "proj.worktrees/claude/BROKEN").exists()
 
 
-def test_budget_stops_the_run(ai, auto, monkeypatch):
-    monkeypatch.setenv("FAKE_COST", "15")
+def test_refuses_outside_orca(ai, auto, monkeypatch):
+    monkeypatch.delenv("ORCA_TERMINAL_HANDLE")
+    code, out = ai(auto.root, "run", "Add a feature")
+    assert code == 1 and "inside Orca" in out
+    monkeypatch.setenv("ORCA_TERMINAL_HANDLE", "term_coordinator")
+    monkeypatch.setenv("FAKE_REPO", "/somewhere/else")
+    code, out = ai(auto.root, "run", "Add a feature")
+    assert code == 1 and "orca repo add --path" in out
+
+
+def test_waits_while_owner_answers_a_startup_prompt(ai, auto):
+    auto.scenario(blocked_waits=2)
+    code, out = ai(auto.root, "run", "Add a feature")
+    assert code == 0, out
+    assert out.count("is waiting for you: Claude Code asks whether you trust this folder") == 1
+
+
+def test_worker_that_forgets_to_report_is_reminded_once(ai, auto):
+    auto.scenario(silent="AI-ENG-ROLE: plan")
+    code, out = ai(auto.root, "run", "Add a feature")
+    assert code == 0, out
+    log = next((auto.root / ".git/ai-eng/runs/add-a-feature").glob("*coordinator-plan.log")).read_text()
+    assert "reminded the worker to send worker_done" in log
+
+
+def test_new_review_worktree_waits_for_orca_discovery(ai, auto):
+    auto.scenario(unknown_once="review-claude")
     ai(auto.root, "run", "Add a feature")
     code, out = ai(auto.root, "run", "--continue", "add-a-feature")
-    assert code == 2 and "budget of $20" in out
-    assert auto.state()["spent_usd"] >= 20
+    assert code == 0, out
+
+
+def test_cross_lane_dependency_builds_on_the_other_task(ai, auto):
+    tasks = [{"id": "T1", "title": "base", "owner": "claude", "depends_on": []},
+             {"id": "T2", "title": "on top", "owner": "codex", "depends_on": ["T1"]}]
+    auto.scenario(tasks=tasks)
+    ai(auto.root, "run", "Add a feature")
+    code, out = ai(auto.root, "run", "--continue", "add-a-feature")
+    assert code == 0, out
+    state = auto.state()
+    assert state["tasks"]["T2"]["base_ref"] == "claude/add-a-feature-t1"
+    assert git(auto.root, "merge-base", "--is-ancestor", "claude/add-a-feature-t1", "codex/add-a-feature-t2") == ""
+
+
+def test_reviewer_that_edits_is_stopped(ai, auto):
+    auto.scenario(reviewer_edits="T1")
+    ai(auto.root, "run", "Add a feature")
+    code, out = ai(auto.root, "run", "--continue", "add-a-feature")
+    assert code == 2 and "reviewer changed files" in out
+    assert "claude/add-a-feature-t1" not in remote_branches(auto.remote)
 
 
 def test_failed_task_is_retried_on_continue(ai, auto):
@@ -196,8 +245,7 @@ def test_crash_during_review_resumes_without_rebuilding(ai, auto):
     code, out = ai(auto.root, "run", "--continue", "add-a-feature")
     assert code == 2 and "codex-review-T1" in out
     sha = auto.state()["tasks"]["T1"]["sha"]
-    # The reviewer's worktree was put back on its own branch.
-    assert git(auto.root.parent / "proj.worktrees/codex", "branch", "--show-current") == "conductor/codex"
+    assert auto.state()["tasks"]["T2"]["status"] == "published"  # the other lane finished regardless
     code, out = ai(auto.root, "run", "--continue", "add-a-feature")
     assert code == 0, out
     assert len([c for c in auto.calls() if c["role"] == "build" and c["task"] == "T1"]) == 1

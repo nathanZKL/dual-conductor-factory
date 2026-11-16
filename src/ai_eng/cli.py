@@ -16,9 +16,9 @@ from .util import redact, run, write_text
 
 EXIT_OK, EXIT_ERROR, EXIT_CONFLICT, EXIT_ESCALATE = 0, 1, 2, 4
 
-ORCA_MANUAL = """Orca (optional): ai-eng does not configure Orca automatically yet. To use it:
+ORCA_MANUAL = """Orca: `ai-eng run` starts every agent as an Orca worker. Add this repository to Orca once:
   orca repo add --path "{root}"
-  then open each conductor worktree in Orca and start the agent there."""
+  then run `ai-eng run "<idea>"` from a terminal inside Orca, in the main checkout."""
 
 
 def _interactive(args) -> bool:

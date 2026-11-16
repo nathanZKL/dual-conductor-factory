@@ -35,15 +35,15 @@ Base branch: `@@BASE_BRANCH@@`. Test command: `@@TEST_COMMAND@@`.
 
 ## Automated mode
 
-`ai-eng run "<feature idea>"` runs this workflow for you. The coordinator writes the plan and stops so the owner can edit it. `ai-eng run --continue <plan-id>` then does steps 4 to 9 with no hand-offs:
+`ai-eng run "<feature idea>"` runs this workflow for you, with every agent as an Orca worker. Run it from a terminal inside Orca, in the main checkout. The coordinator writes the plan and stops so the owner can edit it. `ai-eng run --continue <plan-id>` then does steps 4 to 9 with no hand-offs:
 
 - Codex reviews the plan, and the coordinator revises it until GO.
-- Each task is built in its owner's worktree with its subagents.
+- Claude's tasks and Codex's tasks are built in parallel, each in its owner's worktree with its subagents.
 - ai-eng runs `@@TEST_COMMAND@@` itself and commits.
-- The other conductor reviews that exact SHA; NO-GO loops back to the author.
+- The other conductor reviews that exact SHA in its review worktree (`review-claude` or `review-codex` next to the conductor worktrees); NO-GO loops back to the author.
 - On GO, ai-eng pushes and opens a draft PR.
 
-Agents never commit, push or open PRs in this mode; ai-eng does that after its own checks. It stops and asks the owner on escalation, on repeated test failures, or when the budget in `.ai-eng/config.json` (`automation.budget_usd`) is used up. `ai-eng run --status` shows progress.
+Agents never commit, push or open PRs in this mode; ai-eng does that after its own checks. If you were started by ai-eng as an Orca worker, do only the task you were given and end with the reply it asks for. ai-eng stops and asks the owner on escalation, on repeated test failures, or when an agent times out. `ai-eng run --status` shows progress.
 
 ## Subagents
 
