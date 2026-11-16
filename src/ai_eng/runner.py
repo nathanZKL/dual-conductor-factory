@@ -1,8 +1,10 @@
-"""`ai-eng run`: drive the dual-conductor loop with headless agents.
+"""`ai-eng run`: drive the dual-conductor loop with every agent running as an Orca worker.
 
 Humans do two things: edit the plan, and merge PRs. Everything between is automatic:
 plan review loop (Codex <-> coordinator), building each task in its owner's worktree, ai-eng's own
 test run, commit, review by the *other* conductor at that exact SHA, fix loop, push and draft PR.
+Claude's tasks and Codex's tasks run in parallel, one lane per conductor; reviews happen in separate
+review worktrees, so a reviewer never disturbs its own conductor's work.
 
 Agents never commit, push or open PRs; ai-eng does, after its own checks. State is saved after every
 step in .git/ai-eng/runs/<plan-id>.json, so `ai-eng run --continue <plan-id>` resumes where it stopped.
@@ -12,12 +14,14 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from . import review
-from .agents import extract_json, run_claude, run_codex
+from .agents import AgentError, Mailbox, claude_command, codex_command, extract_json, preflight, run_agent
 from .config import ROLES
 from .gitrepo import common_dir, current_branch, dirty_paths, git, origin_url, rev
 from .util import read_text, run, run_tree, write_text
@@ -29,10 +33,10 @@ PROTECTED = (".ai-eng/", ".claude/", ".codex/", ".github/workflows/", "CLAUDE.md
 JUNK = (":(exclude,glob)**/__pycache__/**", ":(exclude,glob)**/*.pyc", ":(exclude,glob)**/.pytest_cache/**",
         ":(exclude,glob)**/node_modules/**")
 
-DEFAULTS = {"budget_usd": 20.0, "agent_timeout_minutes": 30, "test_timeout_minutes": 15, "max_fix_attempts": 2}
+DEFAULTS = {"agent_timeout_minutes": 30, "test_timeout_minutes": 15, "max_fix_attempts": 2}
 OTHER = {"claude": "codex", "codex": "claude"}
 READ_TOOLS = ["Read", "Grep", "Glob"]
-VERDICT_FORMAT = ('End your reply with this JSON object and nothing after it:\n'
+VERDICT_FORMAT = ('Your final reply (and worker_done report body) must be this JSON object and nothing else:\n'
                   '{"verdict": "GO" or "NO-GO", "findings": ["<file:line or section>: <problem> -> <expected fix>", ...], '
                   '"tests": ["<command>: <result>", ...]}')
 DONE = ("published", "ready")
@@ -114,20 +118,42 @@ class Run:
         self.log_dir = runs / plan_id
         text = read_text(self.state_path)
         self.state: Optional[Dict] = json.loads(text) if text else None
+        # One lock guards state, Git and output. Each thread holds it except while waiting on an agent, tests or
+        # the network (see unlocked), so the two conductor lanes never touch state at the same time.
+        self.lock = threading.RLock()
+        self.cond = threading.Condition(self.lock)
+        self.mail: Optional[Mailbox] = None
+        self.errors: List[RunStop] = []
+        self.finished: set = set()  # task ids settled in this session
+        self.lanes_done: set = set()
+        self.logs = len(list(self.log_dir.glob("*.log"))) if self.log_dir.exists() else 0
 
     # ------------------------------------------------------------ plumbing
 
     def save(self) -> None:
-        write_text(self.state_path, json.dumps(self.state, indent=2) + "\n")
+        with self.lock:
+            write_text(self.state_path, json.dumps(self.state, indent=2) + "\n")
+            self.cond.notify_all()
 
     def say(self, message: str) -> None:
-        print(message, flush=True)
-        self.state.setdefault("events", []).append(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} {message}")
-        self.save()
+        with self.lock:
+            print(message, flush=True)
+            self.state.setdefault("events", []).append(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} {message}")
+            self.save()
+
+    @contextmanager
+    def unlocked(self):
+        """Let the other lane work while this thread waits on something slow. Never touch state inside."""
+        self.lock.release()
+        try:
+            yield
+        finally:
+            self.lock.acquire()
 
     def new_log(self, step: str) -> Path:
-        count = len(list(self.log_dir.glob("*.log"))) if self.log_dir.exists() else 0
-        return self.log_dir / f"{count + 1:02d}-{step}.log"
+        with self.lock:
+            self.logs += 1
+            return self.log_dir / f"{self.logs:02d}-{step}.log"
 
     def worktree(self, who: str) -> Path:
         return (self.root / self.cfg["conductors"][who]["worktree"]).resolve()
@@ -139,28 +165,21 @@ class Run:
         parts = [p.strip() for p in re.split(r"&&|\|\||;|\|", self.test_command()) if p.strip()]
         return [f"Bash({p}:*)" for p in parts] + [f"Bash({c}:*)" for c in ("git status", "git diff", "git log", "git show")]
 
-    def claude(self, cwd: Path, prompt: str, tools: List[str], mode: str, step: str, model: Optional[str] = None) -> str:
-        left = float(self.opts["budget_usd"]) - float(self.state.get("spent_usd", 0))
-        if left <= 0.01:
-            raise RunStop(f"budget of ${self.opts['budget_usd']} reached (spent ${self.state.get('spent_usd', 0):.2f}). "
-                          f"Raise automation.budget_usd in .ai-eng/config.json, then: ai-eng run --continue {self.plan_id}")
-        log = self.new_log(step)
-        result = run_claude(cwd, prompt, model or self.cfg["conductors"]["claude"]["model"], tools, mode, left,
-                            int(self.opts["agent_timeout_minutes"] * 60), log)
-        self.state["spent_usd"] = round(float(self.state.get("spent_usd", 0)) + result.cost_usd, 4)
-        self.save()
-        if not result.ok:
-            raise RunStop(f"{step}: {result.error}. Log: {log}")
-        return result.text
+    def claude(self, cwd: Path, prompt: str, tools: List[str], step: str, model: Optional[str] = None) -> str:
+        return self._agent(claude_command(model or self.cfg["conductors"]["claude"]["model"], tools), cwd, prompt, step)
 
     def codex(self, cwd: Path, prompt: str, sandbox: str, step: str, role: Optional[str] = None) -> str:
         spec = self.cfg["subagents"][role]["codex"] if role else self.cfg["conductors"]["codex"]
+        return self._agent(codex_command(spec["model"], spec.get("effort", "medium"), sandbox), cwd, prompt, step)
+
+    def _agent(self, argv: List[str], cwd: Path, prompt: str, step: str) -> str:
         log = self.new_log(step)
-        result = run_codex(cwd, prompt, spec["model"], spec.get("effort", "medium"), sandbox,
-                           int(self.opts["agent_timeout_minutes"] * 60), log)
-        if not result.ok:
-            raise RunStop(f"{step}: {result.error}. Log: {log}")
-        return result.text
+        with self.unlocked():
+            try:
+                return run_agent(self.mail, cwd, argv, prompt, f"ai-eng {self.plan_id} {step}",
+                                 int(self.opts["agent_timeout_minutes"] * 60), log, self.say)
+            except AgentError as exc:
+                raise RunStop(f"{step}: {exc}. Log: {log}")
 
     def verdict(self, text: str, step: str) -> Dict:
         data = extract_json(text, "verdict")
@@ -190,7 +209,7 @@ class Run:
     def write_plan(self, prompt: str, step: str) -> None:
         before = set(dirty_paths(self.root))
         tools = READ_TOOLS + [f"Write({self.plan_rel})", f"Edit({self.plan_rel})"]
-        self.claude(self.root, prompt, tools, "default", step, model=self.cfg["coordinator"]["model"])
+        self.claude(self.root, prompt, tools, step, model=self.cfg["coordinator"]["model"])
         stray = set(dirty_paths(self.root)) - before - {self.plan_rel, "docs/ai-eng/plans/", "docs/ai-eng/"}
         stray = {p for p in stray if not p.startswith("docs/ai-eng/plans/")}
         if stray:
@@ -258,7 +277,7 @@ class Run:
                 tools += ["WebSearch", "WebFetch"]
             self.say(f"[{tid}] Claude Code conductor building (subagents: implementer, tester"
                      + "".join(f", {s}" for s in task.get("subagents") or []) + ")")
-            self.claude(wt, prompt_build_claude(self, task, findings, failure), tools, "acceptEdits", f"claude-build-{tid}")
+            self.claude(wt, prompt_build_claude(self, task, findings, failure), tools, f"claude-build-{tid}")
             return
         notes = ""
         if "research" in (task.get("subagents") or []) and not findings and not failure:
@@ -279,7 +298,8 @@ class Run:
                            f"codex-implement-security-{tid}", "implement")
 
     def run_tests(self, wt: Path) -> tuple:
-        code, out, err = run_tree(self.test_command(), wt, int(self.opts["test_timeout_minutes"] * 60), shell=True)
+        with self.unlocked():
+            code, out, err = run_tree(self.test_command(), wt, int(self.opts["test_timeout_minutes"] * 60), shell=True)
         return (124 if code is None else code), ((out or "") + (err or ""))[-6000:]
 
     def verify_and_commit(self, task: dict, owner: str, wt: Path, st: Dict) -> bool:
@@ -312,37 +332,31 @@ class Run:
             self.say(f"[{tid}] fix attempt {attempts}: {problem.splitlines()[0]}")
             self.build(task, owner, wt, findings=st.get("findings"), failure=problem)
 
+    def review_worktree(self, reviewer: str, sha: str) -> Path:
+        """A detached checkout used only for this conductor's reviews, so it never touches the conductor's own work."""
+        path = self.worktree(reviewer).parent / f"review-{reviewer}"
+        if not path.exists():
+            git(self.root, "worktree", "add", "--quiet", "--detach", str(path), sha)
+            return path
+        if dirty_paths(path):
+            raise RunStop(f"{path} has uncommitted changes, but reviewers must not edit files. Inspect it, "
+                          f"clean it (git -C \"{path}\" status), then: ai-eng run --continue {self.plan_id}")
+        git(path, "switch", "--quiet", "--detach", sha)
+        return path
+
     def review_commit(self, task: dict, owner: str, branch: str, base_ref: str, sha: str, tests: str) -> Dict:
         reviewer = OTHER[owner]
-        rwt = self.worktree(reviewer)
-        if dirty_paths(rwt):
-            raise RunStop(f"the {reviewer} worktree has uncommitted changes; it must be clean to review")
+        rwt = self.review_worktree(reviewer, sha)
         diff = git(self.root, "diff", f"{base_ref}...{sha}") or ""
         prompt = prompt_review_commit(self, task, owner, reviewer, branch, sha, diff, tests)
-        # Saved before switching, so even a hard crash can put the reviewer's worktree back on --continue.
-        self.state["restore"] = {"worktree": str(rwt), "to": current_branch(rwt) or rev(rwt, "HEAD")}
-        self.save()
-        git(rwt, "switch", "--quiet", "--detach", sha)
-        try:
-            self.say(f"[{task['id']}] {reviewer} reviewing {sha[:12]}")
-            if reviewer == "claude":
-                text = self.claude(rwt, prompt, READ_TOOLS + self.bash_allow(), "default", f"claude-review-{task['id']}")
-            else:
-                text = self.codex(rwt, prompt, "read-only", f"codex-review-{task['id']}")
-        finally:
-            self.restore_reviewer()
+        self.say(f"[{task['id']}] {reviewer} reviewing {sha[:12]}")
+        if reviewer == "claude":
+            text = self.claude(rwt, prompt, READ_TOOLS + self.bash_allow(), f"claude-review-{task['id']}")
+        else:
+            text = self.codex(rwt, prompt, "read-only", f"codex-review-{task['id']}")
+        if dirty_paths(rwt):
+            raise RunStop(f"[{task['id']}] the {reviewer} reviewer changed files in {rwt}; its verdict was not recorded")
         return self.verdict(text, f"{task['id']} review")
-
-    def restore_reviewer(self) -> None:
-        pending = self.state.get("restore")
-        if not pending:
-            return
-        wt, to = Path(pending["worktree"]), pending["to"]
-        is_branch = rev(wt, "refs/heads/" + to) is not None
-        if git(wt, "switch", "--quiet", *([to] if is_branch else ["--detach", to]), check=False) is None:
-            raise RunStop(f"could not switch {wt} back to {to}; do it by hand (git -C {wt} switch {to}), then continue")
-        self.state.pop("restore")
-        self.save()
 
     def publish(self, task: dict, owner: str, st: Dict) -> None:
         tid, branch = task["id"], st["branch"]
@@ -353,7 +367,7 @@ class Run:
             st.update(status="ready", note="no 'origin' remote: push the branch yourself")
             self.say(f"[{tid}] GO, ready; no origin remote to push to")
             return
-        code, out, err = run(["git", "push", "-u", "origin", branch], cwd=self.root, timeout=180)
+        code, out, err = run(["git", "push", "-u", "origin", branch], cwd=self.root, timeout=180)  # locked: one push at a time
         if code != 0:
             st.update(status="ready", note=f"push failed: {(err or out)[-300:]}")
             self.say(f"[{tid}] GO, but push failed: {(err or out).splitlines()[-1] if (err or out) else code}")
@@ -364,9 +378,10 @@ class Run:
             return
         body = self.log_dir / f"pr-{tid}.md"
         write_text(body, pr_body(self, task, owner, st))
-        code, out, err = run(["gh", "pr", "create", "--draft", "--base", st["base_ref"], "--head", branch,
-                              "--title", f"{task['title']} ({self.plan_id} {tid})", "--body-file", str(body)],
-                             cwd=self.root, timeout=120)
+        with self.unlocked():
+            code, out, err = run(["gh", "pr", "create", "--draft", "--base", st["base_ref"], "--head", branch,
+                                  "--title", f"{task['title']} ({self.plan_id} {tid})", "--body-file", str(body)],
+                                 cwd=self.root, timeout=120)
         if code != 0:
             st.update(status="ready", note=f"pushed; PR not opened: {(err or out)[-300:]}")
             self.say(f"[{tid}] pushed {branch}; opening the PR failed")
@@ -448,6 +463,40 @@ class Run:
             st.update(findings=result["findings"], status="building", built_from=None)
             self.save()
 
+    # ------------------------------------------------------------ lanes
+
+    def lane(self, owner: str, tasks: List[dict], owners: Dict[str, str]) -> None:
+        """Build this conductor's tasks in order. Runs in its own thread, in parallel with the other conductor."""
+        with self.lock:
+            try:
+                for task in tasks:
+                    for dep in task.get("depends_on") or []:  # wait until the other lane has settled the dependency
+                        while dep not in self.finished and owners[dep] not in self.lanes_done:
+                            self.cond.wait(30)
+                    self.do_task(task)
+                    self.finished.add(task["id"])
+                    self.cond.notify_all()
+            except RunStop as exc:
+                self.errors.append(exc)
+                self.say(f"[{owner}] stopped: {exc}")
+            except Exception as exc:  # report it like a stop so the other lane's work is still saved
+                self.errors.append(RunStop(f"{owner} lane failed unexpectedly: {exc!r}"))
+                self.say(f"[{owner}] failed unexpectedly: {exc!r}")
+            finally:
+                self.lanes_done.add(owner)
+                self.cond.notify_all()
+
+    def build_all(self) -> None:
+        tasks = self.tasks()
+        owners = {t["id"]: t["owner"] for t in tasks}
+        threads = [threading.Thread(target=self.lane, args=(o, [t for t in tasks if t["owner"] == o], owners))
+                   for o in OTHER if any(t["owner"] == o for t in tasks)]
+        with self.unlocked():
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
 
 # ------------------------------------------------------------ entry points
 
@@ -457,12 +506,26 @@ def _preflight(root: Path, cfg: Dict, full: bool) -> None:
     missing = [tool for tool in ("claude", "codex") if shutil.which(tool) is None]
     if missing:
         raise RunStop(f"not installed or not on PATH: {', '.join(missing)}", 1)
+    problem = preflight(root)
+    if problem:
+        raise RunStop(problem, 1)
     if not (cfg["project"].get("test_command") or "").strip():
         raise RunStop("set project.test_command in .ai-eng/config.json: ai-eng runs it before every commit", 1)
     if full:
         steps, problems = plan_worktrees(root, cfg)
         if problems or any(s["status"] != "exists" for s in steps):
             raise RunStop("conductor worktrees are not ready: run `ai-eng worktrees` (and `ai-eng doctor`)", 1)
+
+
+@contextmanager
+def _driving(run_: Run):
+    """Hold the run lock and an Orca mailbox for the duration of start/resume."""
+    run_.mail = Mailbox()
+    try:
+        with run_.lock:
+            yield
+    finally:
+        run_.mail.stop()
 
 
 def start(root: Path, cfg: Dict, idea: str, plan_id: Optional[str]) -> int:
@@ -473,11 +536,12 @@ def start(root: Path, cfg: Dict, idea: str, plan_id: Optional[str]) -> int:
         raise RunStop(f"run '{run_.plan_id}' already exists: ai-eng run --continue {run_.plan_id}, or pass another --plan-id", 1)
     if plan_exists:
         raise RunStop(f"{run_.plan_rel} already exists; pass another --plan-id", 1)
-    run_.state = {"plan_id": run_.plan_id, "idea": idea, "status": "planning", "spent_usd": 0.0, "tasks": {}, "events": []}
-    run_.say(f"[plan] coordinator ({cfg['coordinator']['model']}) writing {run_.plan_rel}")
-    run_.write_plan(prompt_plan(run_, idea), "coordinator-plan")
-    run_.state["status"] = "owner-edit"
-    run_.say(f"[plan] written: {run_.plan_rel}")
+    run_.state = {"plan_id": run_.plan_id, "idea": idea, "status": "planning", "tasks": {}, "events": []}
+    with _driving(run_):
+        run_.say(f"[plan] coordinator ({cfg['coordinator']['model']}) writing {run_.plan_rel}")
+        run_.write_plan(prompt_plan(run_, idea), "coordinator-plan")
+        run_.state["status"] = "owner-edit"
+        run_.say(f"[plan] written: {run_.plan_rel}")
     problems = validate_tasks(extract_json(run_.plan_text(), "tasks"))
     print(f"\nYour turn: edit {run_.plan_rel} until it is what you want"
           + (f" (also fix the task list: {'; '.join(problems)})" if problems else "")
@@ -496,24 +560,25 @@ def resume(root: Path, cfg: Dict, plan_id: str) -> int:
         run_.state["status"] = "owner-edit"  # the coordinator wrote it before stopping: the owner reviews it first
         run_.say(f"[plan] {run_.plan_rel} exists from an interrupted start. Edit it, then: ai-eng run --continue {plan_id}")
         return 0
-    run_.restore_reviewer()  # a hard crash mid-review may have left the reviewer's worktree detached
     _preflight(root, cfg, full=True)
-    if run_.state["status"] in ("owner-edit", "plan-review", "escalated"):
-        run_.plan_review_loop()
-    run_.state["status"] = "building"
-    run_.save()
-    for task in run_.tasks():
-        run_.do_task(task)
-    statuses = {t: s["status"] for t, s in run_.state["tasks"].items()}
-    run_.state["status"] = "done" if all(s in DONE for s in statuses.values()) else "needs-owner"
-    run_.save()
-    print("\n" + summary(run_))
+    with _driving(run_):
+        if run_.state["status"] in ("owner-edit", "plan-review", "escalated"):
+            run_.plan_review_loop()
+        run_.state["status"] = "building"
+        run_.save()
+        run_.build_all()
+        statuses = {t: s["status"] for t, s in run_.state["tasks"].items()}
+        run_.state["status"] = "done" if not run_.errors and all(s in DONE for s in statuses.values()) else "needs-owner"
+        run_.save()
+        print("\n" + summary(run_))
+        if run_.errors:
+            raise run_.errors[0]
     return 0 if run_.state["status"] == "done" else 2
 
 
 def summary(run_: Run) -> str:
     st = run_.state
-    lines = [f"Run {st['plan_id']}: {st['status']}  (Claude spend ${st.get('spent_usd', 0):.2f} of ${run_.opts['budget_usd']})"]
+    lines = [f"Run {st['plan_id']}: {st['status']}"]
     for tid, t in st.get("tasks", {}).items():
         extra = t.get("pr_url") or t.get("note") or ""
         lines.append(f"  {tid:<6} {t.get('owner', ''):<7} {t['status']:<10} {t.get('branch', '')}  {extra}")

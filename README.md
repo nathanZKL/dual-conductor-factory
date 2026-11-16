@@ -9,7 +9,7 @@ Owner idea -> Coordinator (Claude) plans -> Owner edits plan -> Codex reviews pl
   -> GO: push + draft PR -> owner merges
 ```
 
-`ai-eng` writes instructions, policies and templates, creates the worktrees, and records review verdicts. `ai-eng run` also drives Claude Code and Codex headless, and after its own test run and a GO review it commits, pushes and opens **draft** PRs. It never installs tools, uses Orca, merges, force-pushes or deletes anything.
+`ai-eng` writes instructions, policies and templates, creates the worktrees, and records review verdicts. `ai-eng run` also drives Claude Code and Codex as Orca workers, and after its own test run and a GO review it commits, pushes and opens **draft** PRs. It never installs tools, merges, force-pushes or deletes anything.
 
 ## Install
 
@@ -28,16 +28,16 @@ The formula ([nathanZKL/homebrew-tap](https://github.com/nathanZKL/homebrew-tap)
 **macOS or Linux (release file)**
 
 ```bash
-curl -LO https://github.com/nathanZKL/dual-conductor-factory/releases/download/v0.2.1/ai-eng-0.2.1.pyz
-curl -LO https://github.com/nathanZKL/dual-conductor-factory/releases/download/v0.2.1/SHA256SUMS
+curl -LO https://github.com/nathanZKL/dual-conductor-factory/releases/download/v0.3.0/ai-eng-0.3.0.pyz
+curl -LO https://github.com/nathanZKL/dual-conductor-factory/releases/download/v0.3.0/SHA256SUMS
 shasum -a 256 --check --ignore-missing SHA256SUMS
-python3 ai-eng-0.2.1.pyz --version
+python3 ai-eng-0.3.0.pyz --version
 ```
 
 **Windows (PowerShell, with [uv](https://docs.astral.sh/uv/))**
 
 ```powershell
-$v = "0.2.1"
+$v = "0.3.0"
 Invoke-WebRequest "https://github.com/nathanZKL/dual-conductor-factory/releases/download/v$v/ai_eng-$v-py3-none-any.whl" -OutFile "ai_eng-$v-py3-none-any.whl"
 Invoke-WebRequest "https://github.com/nathanZKL/dual-conductor-factory/releases/download/v$v/SHA256SUMS" -OutFile SHA256SUMS
 (Get-FileHash "ai_eng-$v-py3-none-any.whl" -Algorithm SHA256).Hash.ToLower()   # must match the line in SHA256SUMS
@@ -58,15 +58,27 @@ ai-eng worktrees        # creates ../<repo>.worktrees/claude and ../<repo>.workt
 ai-eng doctor           # what is configured, verified, untested, missing or blocked
 ```
 
-### Automated mode
+### Automated mode (in Orca)
+
+`ai-eng run` starts every agent as an [Orca](https://github.com/stablyai/orca) worker, so you watch and steer the whole run from Orca. Run it from a terminal inside Orca, in the main checkout, after adding the repository to Orca once:
 
 ```bash
+orca repo add --path "$PWD"                         # once per repository
 ai-eng run "Add CSV export to the reports page"   # coordinator writes docs/ai-eng/plans/<id>.md, then stops
 # edit the plan until you like it
 ai-eng run --continue <id>                          # everything else is automatic
 ```
 
-`--continue` runs the plan review loop (Codex reviews, the coordinator revises, until GO), builds each task in its owner's worktree with the configured subagents, runs your test command itself, commits, has the *other* conductor review that exact SHA (NO-GO loops back to the author, 3 rounds max), then pushes and opens a draft PR. You merge. Agents run headless (`claude -p`, `codex exec`) with scoped permissions and never commit, push or open PRs themselves. A run stops and tells you why on escalation, repeated test failures, or when `automation.budget_usd` (default $20 of Claude usage) is spent; `ai-eng run --status` shows where it is, and `--continue` resumes.
+`--continue` runs the plan review loop (Codex reviews, the coordinator revises, until GO). Then Claude's tasks and Codex's tasks build **in parallel**, each in its owner's worktree with the configured subagents. ai-eng runs your test command itself, commits, and has the *other* conductor review that exact SHA in a separate review worktree (`../<repo>.worktrees/review-<conductor>`). NO-GO loops back to the author, 3 rounds max. On GO it pushes and opens a draft PR. You merge.
+
+Each agent step gets its own Orca terminal with the exact model and permissions ai-eng chose:
+- Claude: `--permission-mode dontAsk` with a tool allowlist.
+- Codex builders: `workspace-write` sandbox.
+- Codex reviewers: `read-only` sandbox.
+
+Agents never commit, push or open PRs themselves. A run stops and tells you why on escalation, repeated test failures, or an agent timeout. `ai-eng run --status` shows where it is, and `--continue` resumes.
+
+The first time Claude opens a folder, it asks whether you trust it. Codex asks you to review hooks when `~/.codex/hooks.json` changes. ai-eng never answers these: it prints which Orca terminal is waiting, then carries on once you answer there. Spending is not capped in this mode (`automation.budget_usd` is not enforced).
 
 You can also run the conductors interactively: start Claude Code in the main checkout as the coordinator, Claude Code in the `claude` worktree, and Codex in the `codex` worktree. Each reads its instructions from `CLAUDE.md` / `AGENTS.md` and `docs/ENGINEERING.md`.
 
@@ -96,7 +108,7 @@ Backups of edited files go to `.ai-eng/backups/` (git-ignored). Review records l
 
 ## What is and is not verified
 
-`ai-eng doctor` never reports a capability as verified unless it actually checked it. These are always reported as **untested**, because ai-eng cannot prove them offline: model IDs being available on your plan, Claude Code subagents loading, Orca worker dispatch and completion reporting, and direct Claude-to-Codex messaging. Branch protection and CI runs are checked only with `--online`.
+`ai-eng doctor` never reports a capability as verified unless it actually checked it. These are always reported as **untested**, because ai-eng cannot prove them offline: model IDs being available on your plan, Claude Code subagents loading, Orca worker dispatch on your machine, and direct Claude-to-Codex messaging. Branch protection and CI runs are checked only with `--online`.
 
 ## Docs
 
